@@ -1,6 +1,6 @@
-import { bcs, toBase64, toHex } from "@mysten/bcs";
+import {bcs, toHex} from "@mysten/bcs";
 import * as ed from "@noble/ed25519";
-import { sha512 } from "@noble/hashes/sha2";
+import {sha512} from "@noble/hashes/sha2";
 
 // This is a workaround to allow BigInt to be serialized as a number.
 // https://stackoverflow.com/questions/75749980/typeerror-do-not-know-how-to-serialize-a-bigint
@@ -12,7 +12,7 @@ BigInt.prototype.toJSON = function () {
 
 // This example shows how to sign and submit a transaction to the FastSet network. You will mainly
 // interact with the validator's JSON-RPC API. More about the JSON-RPC API can be found in the
-// [JSON-RPC documentation](/docs/json-rpc.md).
+// [JSON-RPC documentation](/docs/validator/rpc.md).
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Type Definitions
@@ -23,8 +23,10 @@ BigInt.prototype.toJSON = function () {
 // @mysten/bcs library for this. This section shows how to define BCS types in Typescript.
 
 const Bytes32 = bcs.fixedArray(32, bcs.u8());
+const Bytes64 = bcs.fixedArray(64, bcs.u8());
 // FastSet uses Ed25519 public keys as addresses.
 const PublicKey = Bytes32;
+const Signature = Bytes64;
 
 // Account address on FastSet comes with two variants: External and FastSet.
 // - The External variant indicates this address is owned by an external system or entity such as a
@@ -50,7 +52,6 @@ const UserData = bcs.option(Bytes32);
 const Nonce = bcs.u64();
 
 const Transfer = bcs.struct("Transfer", {
-    recipient: Address,
     amount: Amount,
     user_data: UserData,
 });
@@ -65,10 +66,44 @@ const ClaimType = bcs.enum("ClaimType", {
 // The Transaction data type is the one that users sign over.
 const Transaction = bcs.struct("Transaction", {
     sender: PublicKey,
+    recipient: Address,
     nonce: Nonce,
     timestamp_nanos: bcs.u128(),
     claim: ClaimType,
 });
+
+const SubmitTransactionResponse = bcs.struct("SubmitTransactionResponse", {
+    validator: PublicKey,
+    signature: Signature,
+    next_nonce: Nonce,
+    transaction_hash: bcs.byteVector(),
+});
+
+const TransactionEnvelope = bcs.struct("TransactionEnvelope", {
+    transaction: Transaction,
+    signature: Signature,
+});
+
+const TransactionCertificate = bcs.struct("TransactionCertificate", {
+    envelope: TransactionEnvelope,
+    signatures: bcs.vector(bcs.tuple([PublicKey, Signature])),
+});
+
+function parse_set_submitTransaction_response(res: Record<string, unknown>) {
+    // to validate that the response has the required type, we serialize it using bcs
+    // this will fail if the response has the wrong structure
+    // we then bcs.parse, to massage the result's return type
+    let bcs_bytes = SubmitTransactionResponse.serialize(res as any).toBytes();
+    let bcs_value = SubmitTransactionResponse.parse(bcs_bytes);
+    return bcs_value;
+}
+
+function parse_TransactionCertificate(res: Record<string, unknown>) {
+    // see note above for why we do this
+    let bcs_bytes = TransactionCertificate.serialize(res as any).toBytes();
+    let bcs_value = TransactionCertificate.parse(bcs_bytes);
+    return bcs_value;
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Generating keys for testing
@@ -106,17 +141,19 @@ async function getNextNonce(senderAddress: Uint8Array): Promise<number> {
 }
 
 const nonce = await getNextNonce(senderPubKey);
-console.log(`Successfully queried account info ${toBase64(senderPubKey)} next nonce ${nonce}`);
+console.log(`Successfully queried account info ${toHex(senderPubKey)} next nonce ${nonce}`);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Funding the test account from the faucet
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-const faucetRes = await requestProxy("faucetDrip", {
+const requestedAmt = 100000;
+const faucetRes = await requestProxy("set_proxy_faucetDrip", {
     recipient: senderPubKey,
-    amount: "1000000000000000000",
+    amount: requestedAmt.toString(),
 });
-console.log(`Funded account ${toBase64(senderPubKey)} balance ${faucetRes.result.balance}`);
+checkError(faucetRes);
+console.log(`Funded account ${toHex(senderPubKey)} balance ${requestedAmt}\nResponse was:`, faucetRes.result);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Signing a transaction
@@ -126,11 +163,11 @@ console.log(`Funded account ${toBase64(senderPubKey)} balance ${faucetRes.result
 
 const transaction = {
     sender: senderPubKey,
+    recipient: { FastSet: recipientPubKey },
     nonce, // uses the nonce fetched from the account info request
     timestamp_nanos: BigInt(Date.now()) * 1_000_000n, // current time in nanoseconds
     claim: {
         Transfer: {
-            recipient: { FastSet: recipientPubKey },
             amount: "ffff", // validators require the amount to be in hex.
             user_data: null, // optional
         },
@@ -155,8 +192,19 @@ const signature = ed.sign(dataToSign, senderPrivKey);
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Transaction execution involves two steps:
-// 1. Submit the transaction to the validator node
-// 2. Confirm the transaction by submitting a certificate to the validator node
+//
+// 1. Manually submit the transaction to the validator node
+//    NOTE: This is sufficient because we only have a single validator currently
+//          Otherwise, we would manually need to submit to each node
+//
+// 2. Perform steps 1+3 automatically using the proxy convenience method and obtain the resulting transaction certificate
+//    NOTE: This method is more user-friendly than 1+3 as it automatically contacts all validators,
+//          something that must be manually done using methods 1+3
+//    NOTE: We must perform step 2 before 3; otherwise the account's nonce will be off by 1
+//
+// 3. Manually confirm the transaction by submitting a certificate to the validator node
+//    NOTE: As mentioned in step 1, this code is only sufficient because we have a single validator
+//          Otherwise, we would manually need to submit the certificate to each node
 
 // - 1. Sending the transaction to a validator node ------------------------------------------------
 
@@ -166,14 +214,28 @@ const submitTxReq = {
 };
 console.log(
     `Submitting transaction from ${toHex(transaction.sender)} to ${toHex(
-        transaction.claim.Transfer.recipient.FastSet,
+        transaction.recipient.FastSet,
     )} amount ${transaction.claim.Transfer.amount}`,
 );
 const submitTxRes = await requestValidator("set_submitTransaction", submitTxReq);
 checkError(submitTxRes);
-console.log(`Transaction ${toHex(submitTxRes.result.transaction_hash)} submitted!`);
+const parsedSubmitTxRes = parse_set_submitTransaction_response(submitTxRes.result);
+console.log(`Transaction ${toHex(submitTxRes.result.transaction_hash)} submitted! Response was:\n`, parsedSubmitTxRes);
 
-// - 2. Confirming the transaction by submitting a certificate to the validator node ---------------
+// - 2. Sending the transaction to all validator node using the proxy ------------------------------
+// NOTE: this implicitly performs steps 1 & 2 above
+
+console.log(
+    `Submitting transaction from ${toHex(transaction.sender)} to ${toHex(
+        transaction.recipient.FastSet,
+    )} amount ${transaction.claim.Transfer.amount}`,
+);
+const proxySubmitTxRes = await requestProxy("set_proxy_submitTransaction", submitTxReq);
+checkError(proxySubmitTxRes);
+const proxyCert = parse_TransactionCertificate(proxySubmitTxRes.result);
+console.log('proxy_set_submitTransaction retrieved certificate was:', proxyCert);
+
+// - 3. Confirming the transaction by submitting a certificate to the validator node ---------------
 
 const submitCertReq = {
     transaction, // attach the same transaction object as above
@@ -215,11 +277,11 @@ async function request(url: string, method: string, params: any): Promise<any> {
 }
 
 async function requestValidator(method: string, params: any): Promise<any> {
-    return await request("http://157.90.201.117:8765", method, params);
+    return await request("http://138.199.241.142:8765", method, params);
 }
 
 async function requestProxy(method: string, params: any): Promise<any> {
-    return await request("http://136.243.61.168:44444", method, params);
+    return await request("http://157.90.194.26:44444", method, params);
 }
 
 function hexToDecimal(hex: string) {
