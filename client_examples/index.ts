@@ -309,11 +309,11 @@ async function request(url: string, method: string, params: any): Promise<any> {
 }
 
 async function requestValidator(method: string, params: any): Promise<any> {
-    return await request("http://127.0.0.1:8765", method, params);
+    return await request("http://138.199.241.142:8765", method, params);
 }
 
 async function requestProxy(method: string, params: any): Promise<any> {
-    return await request("http://127.0.0.1:44444", method, params);
+    return await request("http://157.90.194.26:44444", method, params);
 }
 
 function hexToDecimal(hex: string) {
