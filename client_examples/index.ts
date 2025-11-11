@@ -10,9 +10,9 @@ BigInt.prototype.toJSON = function () {
     return Number(this);
 };
 
-// This example shows how to sign and submit a transaction to the FastSet network. You will mainly
-// interact with the validator's JSON-RPC API. More about the JSON-RPC API can be found in the
-// [JSON-RPC documentation](/docs/validator/rpc.md).
+// This example shows how to sign and submit a transaction to the FastSet network. 
+// You will mainly interact with the JSON-RPC API of the validator or proxy.
+// More information can be found in the docs folder.
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Type Definitions
@@ -25,18 +25,9 @@ BigInt.prototype.toJSON = function () {
 const Bytes32 = bcs.fixedArray(32, bcs.u8());
 const Bytes64 = bcs.fixedArray(64, bcs.u8());
 // FastSet uses Ed25519 public keys as addresses.
+const TokenId   = Bytes32;
 const PublicKey = Bytes32;
 const Signature = Bytes64;
-
-// Account address on FastSet comes with two variants: External and FastSet.
-// - The External variant indicates this address is owned by an external system or entity such as a
-//   smart contract on another blockchain.
-// - The FastSet variant indicates the address is native to FastSet. This is most likely the one you
-//   are interested in.
-const Address = bcs.enum("Address", {
-    External: PublicKey,
-    FastSet: PublicKey,
-});
 
 // Indicates an amount of any token
 const Amount = bcs.u256().transform({
@@ -51,7 +42,19 @@ const UserData = bcs.option(Bytes32);
 // The nonce on FastSet is similar to Ethereum's nonce.
 const Nonce = bcs.u64();
 
-const Transfer = bcs.struct("Transfer", {
+// A quorum is just a type pun for a u64
+const Quorum = bcs.u64();
+
+// token_id for the native token
+// 0xFA575E7000000000000000000000000000000000000000000000000000000000
+const SET_TOKEN_ID = (() => {
+    var setTokenId = new Uint8Array(32);
+    setTokenId.set([0xFA, 0x57, 0x5E, 0x70], 0);
+    return setTokenId;
+ })();
+
+const TokenTransfer = bcs.struct("TokenTransfer", {
+    token_id: TokenId, 
     amount: Amount,
     user_data: UserData,
 });
@@ -60,13 +63,13 @@ const Transfer = bcs.struct("Transfer", {
 // the "calldata" of a transaction on Ethereum. There are many types of claims, but in this example,
 // others are omitted since we are interested in the Transfer claim.
 const ClaimType = bcs.enum("ClaimType", {
-    Transfer: Transfer,
+    TokenTransfer: TokenTransfer,
 });
 
 // The Transaction data type is the one that users sign over.
 const Transaction = bcs.struct("Transaction", {
     sender: PublicKey,
-    recipient: Address,
+    recipient: PublicKey,
     nonce: Nonce,
     timestamp_nanos: bcs.u128(),
     claim: ClaimType,
@@ -79,14 +82,35 @@ const SubmitTransactionResponse = bcs.struct("SubmitTransactionResponse", {
     transaction_hash: bcs.byteVector(),
 });
 
+const MultiSigConfig = bcs.struct("MultiSigConfig", {
+    authorized_signers: bcs.vector(PublicKey),
+    quorum: Quorum,
+    nonce: Nonce,
+});
+
+const MultiSig = bcs.struct("MultiSig", {
+    config: MultiSigConfig,
+    signatures: bcs.vector(bcs.tuple([PublicKey, Signature])),
+});
+
+const SignatureOrMultiSig = bcs.enum("SignatureOrMultiSig", {
+    Signature: Signature,
+    MultiSig: MultiSig,
+});
+
 const TransactionEnvelope = bcs.struct("TransactionEnvelope", {
     transaction: Transaction,
-    signature: Signature,
+    signature: SignatureOrMultiSig,
 });
 
 const TransactionCertificate = bcs.struct("TransactionCertificate", {
     envelope: TransactionEnvelope,
     signatures: bcs.vector(bcs.tuple([PublicKey, Signature])),
+});
+
+const ProxySubmitTransactionResult = bcs.enum("ProxySubmitTransactionResult", {
+    Success: TransactionCertificate,
+    IncompleteVerifierSigs: bcs.tuple([]),
 });
 
 function parse_set_submitTransaction_response(res: Record<string, unknown>) {
@@ -100,8 +124,8 @@ function parse_set_submitTransaction_response(res: Record<string, unknown>) {
 
 function parse_TransactionCertificate(res: Record<string, unknown>) {
     // see note above for why we do this
-    let bcs_bytes = TransactionCertificate.serialize(res as any).toBytes();
-    let bcs_value = TransactionCertificate.parse(bcs_bytes);
+    let bcs_bytes = ProxySubmitTransactionResult.serialize(res as any).toBytes();
+    let bcs_value = ProxySubmitTransactionResult.parse(bcs_bytes);
     return bcs_value;
 }
 
@@ -163,11 +187,12 @@ console.log(`Funded account ${toHex(senderPubKey)} balance ${requestedAmt}\nResp
 
 const transaction = {
     sender: senderPubKey,
-    recipient: { FastSet: recipientPubKey },
+    recipient: recipientPubKey,
     nonce, // uses the nonce fetched from the account info request
     timestamp_nanos: BigInt(Date.now()) * 1_000_000n, // current time in nanoseconds
     claim: {
-        Transfer: {
+        TokenTransfer: {
+            token_id: SET_TOKEN_ID,
             amount: "ffff", // validators require the amount to be in hex.
             user_data: null, // optional
         },
@@ -185,7 +210,7 @@ const prefix = new TextEncoder().encode("Transaction::");
 const dataToSign = new Uint8Array(prefix.length + msgBytes.length);
 dataToSign.set(prefix, 0);
 dataToSign.set(msgBytes, prefix.length);
-const signature = ed.sign(dataToSign, senderPrivKey);
+const signature = makeSignature(dataToSign, senderPrivKey);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Executing a transaction
@@ -212,11 +237,13 @@ const submitTxReq = {
     transaction,
     signature,
 };
+
 console.log(
     `Submitting transaction from ${toHex(transaction.sender)} to ${toHex(
-        transaction.recipient.FastSet,
-    )} amount ${transaction.claim.Transfer.amount}`,
+        transaction.recipient,
+    )} amount ${transaction.claim.TokenTransfer.amount}`,
 );
+
 const submitTxRes = await requestValidator("set_submitTransaction", submitTxReq);
 checkError(submitTxRes);
 const parsedSubmitTxRes = parse_set_submitTransaction_response(submitTxRes.result);
@@ -227,13 +254,14 @@ console.log(`Transaction ${toHex(submitTxRes.result.transaction_hash)} submitted
 
 console.log(
     `Submitting transaction from ${toHex(transaction.sender)} to ${toHex(
-        transaction.recipient.FastSet,
-    )} amount ${transaction.claim.Transfer.amount}`,
+        transaction.recipient,
+    )} amount ${transaction.claim.TokenTransfer.amount}`,
 );
 const proxySubmitTxRes = await requestProxy("set_proxy_submitTransaction", submitTxReq);
 checkError(proxySubmitTxRes);
 const proxyCert = parse_TransactionCertificate(proxySubmitTxRes.result);
 console.log('proxy_set_submitTransaction retrieved certificate was:', proxyCert);
+
 
 // - 3. Confirming the transaction by submitting a certificate to the validator node ---------------
 
@@ -263,6 +291,10 @@ function buildJsonRpcRequest(id: number, method: string, params: any) {
         method,
         params,
     };
+}
+
+function makeSignature(dataToSign: Uint8Array, senderPrivKey: ed.Bytes) {
+    return { Signature: ed.sign(dataToSign, senderPrivKey) }
 }
 
 async function request(url: string, method: string, params: any): Promise<any> {

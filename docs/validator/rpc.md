@@ -4,6 +4,7 @@
 
 - [`set_submitTransaction`](#set_submittransaction)
 - [`set_submitTransactionCertificate`](#set_submittransactioncertificate)
+- [`set_getTransactions`](#set_gettransactions)
 - [`set_getTransfers`](#set_gettransfers)
 - [`set_getClaims`](#set_getclaims)
 - [`set_getClaimsByAddress`](#set_getclaimsbyaddress)
@@ -11,6 +12,7 @@
 - [`set_getAccountInfo`](#set_getaccountinfo)
 - [`set_getTokenInfo`](#set_gettokeninfo)
 - [`set_getVersion`](#set_getversion)
+- [`set_checkpoint`](#set_checkpoint)
 
 ---
 
@@ -34,7 +36,8 @@ Here is an [example implementation](/docs/client_examples/index.ts) of the serde
 
 Input:
 - `transaction`: a [Transaction](#transaction) of any [ClaimType](#claimtype)
-- `signature`: a [Signature](#signature) over the transaction created by the [sender]
+- `signature`: a [SignatureOrMultiSig](#signatureormultisig) over the transaction created by the [sender]
+(with the verifier signatures field set to the empty list in the case of [ExternalClaim](#externalclaim)s)
 
 Returns:
 - [SubmitTransactionResponse](#submittransactionresponse) if the transaction was successfully submitted
@@ -45,7 +48,7 @@ Returns:
 | Name | Type |
 |------|------|
 | `transaction` | [`Transaction`](#transaction) |
-| `signature` | [`Signature`](#signature) |
+| `signature` | [`SignatureOrMultiSig`](#signatureormultisig) |
 
 **Returns**:
 
@@ -59,7 +62,7 @@ Submit a transaction certificate to the validator.
 
 Input:
 - `transaction`: the [Transaction](#transaction) submitted previously via set_submitTransaction
-- `signature`: the [Signature](#signature) submitted previously via set_submitTransaction
+- `signature`: the [SignatureOrMultiSig](#signatureormultisig) submitted previously via set_submitTransaction
 - `validator_signatures`: a list of validator signatures
 
 Returns:
@@ -70,12 +73,36 @@ Returns:
 | Name | Type |
 |------|------|
 | `transaction` | [`Transaction`](#transaction) |
-| `signature` | [`Signature`](#signature) |
+| `signature` | [`SignatureOrMultiSig`](#signatureormultisig) |
 | `validator_signatures` | Vec< (ValidatorName , Signature) > |
 
 **Returns**:
 
 [`ConfirmTransactionResponse`](#confirmtransactionresponse)
+
+---
+
+## `set_getTransactions`
+
+Get paginated transactions known to this validator
+
+Input:
+- `page`: a [PageRequest](#pagerequest)(#pagerequest) object that specifies the limit (max number of entries to return)
+    and the page [token]. To query the first page, omit the token in the request.
+
+Returns:
+- a [Page<Timed<TransactionInfo>>]. The [next_page_token] in the field can be used as the
+    [token] field in the next [PageRequest](#pagerequest)(#pagerequest) to fetch the next page.
+
+**Parameters**:
+
+| Name | Type |
+|------|------|
+| `page` | [`PageRequest`](#pagerequest) |
+
+**Returns**:
+
+Page< Timed< [`TransactionInfo`](#transactioninfo) > >
 
 ---
 
@@ -88,7 +115,7 @@ Input:
     and the page [token]. To query the first page, omit the token in the request.
 
 Returns:
-- a [Page<Timed<Transfer>>]. The [next_page_token] in the field can be used as the
+- a [Page<Timed<TransactionInfo>>]. The [next_page_token] in the field can be used as the
     [token] field in the next [PageRequest](#pagerequest)(#pagerequest) to fetch the next page.
 
 **Parameters**:
@@ -99,7 +126,7 @@ Returns:
 
 **Returns**:
 
-Page< Timed< [`Transfer`](#transfer) > >
+Page< Timed< [`TransactionInfo`](#transactioninfo) > >
 
 ---
 
@@ -119,7 +146,6 @@ Returns:
 
 | Name | Type |
 |------|------|
-| `confirmed` | bool |
 | `page` | [`PageRequest`](#pagerequest) |
 
 **Returns**:
@@ -152,11 +178,11 @@ Vec< [`TransactionWithHash`](#transactionwithhash) >
 Query the performance info data for this validator
 
 Returns:
-- [PerformanceInfoResponse](#performanceinforesponse)
+- [RpcPerformanceInfoResponse](#rpcperformanceinforesponse)
 
 **Returns**:
 
-[`PerformanceInfoResponse`](#performanceinforesponse)
+[`RpcPerformanceInfoResponse`](#rpcperformanceinforesponse)
 
 ---
 
@@ -222,6 +248,22 @@ String
 
 ---
 
+## `set_checkpoint`
+
+Request the validator to create a checkpoint.
+
+**Parameters**:
+
+| Name | Type |
+|------|------|
+| `checkpoint_request` | CheckpointRequest |
+
+**Returns**:
+
+()
+
+---
+
 ## Data Types
 
 ---
@@ -235,12 +277,15 @@ One of various types of actions that can be packed into a transaction
 #### Variants:
 | Name | Type | Notes |
 |------|------|-------|
-| `Transfer` | [`Transfer`](#transfer) | Transfer funds, native token |
-| `TokenTransfer` | [`TokenTransfer`](#tokentransfer) | Transfer funds, other token |
+| `TokenTransfer` | [`TokenTransfer`](#tokentransfer) | Transfer or burn tokens (that is, transfer tokens to the burn address) |
 | `TokenCreation` | [`TokenCreation`](#tokencreation) | Create custom token |
 | `TokenManagement` | [`TokenManagement`](#tokenmanagement) | Modify custom token |
 | `Mint` | [`Mint`](#mint) | Mint funds in a custom token |
+| `StateInitialization` | [`StateInitialization`](#stateinitialization) | Initialize the state of an Ethereum blockchain mirroring account |
+| `StateUpdate` | [`StateUpdate`](#stateupdate) | Update the state of an Ethereum blockchain mirroring account |
 | `ExternalClaim` | [`ExternalClaim`](#externalclaim) | Submit arbitrary data to be settled on the network |
+| `StateReset` | [`StateReset`](#statereset) | Reset the state of an Ethereum blockchain mirroring account |
+| `Batch` | [`OperationBundle`](#operationbundle) | Perform several operations |
 
 ---
 
@@ -254,7 +299,7 @@ Action that can be submitted and confirmed on the network
 | Field | Type | Notes |
 |-------|------|-------|
 | `sender` | [`PublicKeyBytes`](#publickeybytes) | Address of sender, and intended signer of this transaction |
-| `recipient` | [`Address`](#address) | Address of recipient |
+| `recipient` | [`PublicKeyBytes`](#publickeybytes) | Address of the recipient or the burn address |
 | `nonce` | [`Nonce`](#nonce) | A sequence number. Transactions sent by the same account are ordered by nonce. |
 | `timestamp_nanos` | uint128 | Nanos since the Unix epoch. |
 | `claim` | [`ClaimType`](#claimtype) | Type-dependent data |
@@ -263,7 +308,12 @@ Action that can be submitted and confirmed on the network
 
 ### PublicKeyBytes
 
-An Ed25519 Public Key
+A byte sequence that names an entity on or off the FastSet network,
+depending on the name of type which stores this value;
+typically encoded as an Ed25519 public key,
+but may have other formats including but not limited to:
+(a) Burn Address - a 32-byte string composed of all 0x00 bytes.
+Note: any funds sent to the burn address will be permenantly lost!
 
 **JSON Schema**: [PublicKeyBytes](PublicKeyBytes.json)
 
@@ -279,23 +329,9 @@ An Ed25519 Public Key
 
 ---
 
-### Transfer
-
-Transfer funds in the native token to another address
-
-**JSON Schema**: [Transfer](Transfer.json)
-
-#### Fields:
-| Field | Type | Notes |
-|-------|------|-------|
-| `amount` | [`Amount`](#amount) | Amount to transfer |
-| `user_data` | [`UserData`](#userdata) | Extra data field to associate with this transfer |
-
----
-
 ### TokenTransfer
 
-Transfer funds in some custom token to another address
+Transfer tokens to another address
 
 **JSON Schema**: [TokenTransfer](TokenTransfer.json)
 
@@ -347,8 +383,9 @@ Manage an existing token.
 ### Mint
 
 Create more funds of a token.
-The sender of the [Transaction] must be a known
-mint of the token.
+The sender of the [Transaction] must be a current mint of the token.
+Warning: This is not independent of a token management operation that
+removes the sender of this transaction from the list of mints.
 
 **JSON Schema**: [Mint](Mint.json)
 
@@ -370,7 +407,73 @@ Submit arbitrary data along with a quorum of signatures from external verifiers
 | Field | Type | Notes |
 |-------|------|-------|
 | `claim` | [`ExternalClaimBody`](#externalclaimbody) | The claim itself plus the required verifier quorum |
-| `signatures` | Array < ( [`PublicKeyBytes`](#publickeybytes), [`Signature`](#signature) ) > | At least `claim.verifier_quorum` signatures over `claim` by members of `claim.verifier_committee` |
+| `signatures` | Array < [`VerifierSig`](#verifiersig) > | At least `claim.verifier_quorum` signatures over the enclosing `Transaction` (with this field set to the empty list) by members of `claim.verifier_committee` |
+
+---
+
+### OperationBundle
+
+**JSON Schema**: [OperationBundle](OperationBundle.json)
+
+`Array < [`Operation`](#operation) >`
+
+---
+
+### Operation
+
+One of various types of actions that be put in a multi-operation transaction
+Payload structs are different from the top-level [ClaimType] where we
+need to support multiple operations with different receivers
+
+**JSON Schema**: [Operation](Operation.json)
+
+#### Variants:
+| Name | Type | Notes |
+|------|------|-------|
+| `TokenTransfer` | [`TokenTransferOperation`](#tokentransferoperation) | Transfer or burn tokens (that is, transfer tokens to the burn address) |
+| `TokenCreation` | [`TokenCreation`](#tokencreation) | Create custom token |
+| `TokenManagement` | [`TokenManagement`](#tokenmanagement) | Modify custom token |
+| `Mint` | [`MintOperation`](#mintoperation) | Mint funds in a custom token |
+| `StateInitialization` | [`StateInitialization`](#stateinitialization) | Initialize the state of an Ethereum blockchain mirroring account |
+| `StateUpdate` | [`StateUpdate`](#stateupdate) | Update the state of an Ethereum blockchain mirroring account |
+| `ExternalClaim` | [`ExternalClaim`](#externalclaim) | Submit arbitrary data to be settled on the network |
+| `StateReset` | [`StateReset`](#statereset) | Reset the state of an Ethereum blockchain mirroring account |
+
+---
+
+### TokenTransferOperation
+
+Transfer tokens to another address.
+This is a variant of [TokenTransfer] that adds a recipient field.
+
+**JSON Schema**: [TokenTransferOperation](TokenTransferOperation.json)
+
+#### Fields:
+| Field | Type | Notes |
+|-------|------|-------|
+| `token_id` | Array < uint8 ; length=32 > | Token ID to transfer |
+| `recipient` | [`PublicKeyBytes`](#publickeybytes) | Recipient |
+| `amount` | [`Amount`](#amount) | Amount to transfer |
+| `user_data` | [`UserData`](#userdata) | Extra data field to associate with this transfer |
+
+---
+
+### MintOperation
+
+Create more funds of a token.
+The sender of the [Transaction] must be a current mint of the token.
+Warning: This is not independent of a token management operation that
+removes the sender of this transaction from the list of mints.
+This is a variant of [Mint] that adds a recipient field.
+
+**JSON Schema**: [MintOperation](MintOperation.json)
+
+#### Fields:
+| Field | Type | Notes |
+|-------|------|-------|
+| `token_id` | Array < uint8 ; length=32 > | Token ID. This is the hash of the TokenCreation transaction that created the token. This is calculated using the keccak256 hash over the data encoded in the same way as for signing. |
+| `recipient` | [`PublicKeyBytes`](#publickeybytes) | Recipient of the new funds |
+| `amount` | [`Amount`](#amount) | Amount to mint |
 
 ---
 
@@ -387,15 +490,57 @@ Submit arbitrary data along with a quorum of signatures from external verifiers
 
 ---
 
-### Address
+### StateInitialization
 
-**JSON Schema**: [Address](Address.json)
+Initialize the state of a blockchain mirroring account
 
-#### Variants:
-| Name | Type | Notes |
-|------|------|-------|
-| `External` | [`PublicKeyBytes`](#publickeybytes) | |
-| `FastSet` | [`PublicKeyBytes`](#publickeybytes) | |
+**JSON Schema**: [StateInitialization](StateInitialization.json)
+
+#### Fields:
+| Field | Type | Notes |
+|-------|------|-------|
+| `initial_state` | [`State`](#state) | Initial state |
+
+---
+
+### StateUpdate
+
+Update the state of a blockchain mirroring account
+
+**JSON Schema**: [StateUpdate](StateUpdate.json)
+
+#### Fields:
+| Field | Type | Notes |
+|-------|------|-------|
+| `previous_state` | [`State`](#state) | Previous state |
+| `next_state` | [`State`](#state) | Next state |
+| `compute_claim_tx_hash` | Array < uint8 ; length=32 > | |
+| `compute_claim_tx_timestamp` | uint128 | |
+
+---
+
+### StateReset
+
+Reset the state of a blockchain mirroring account
+This claim type is a temporary work-around that allows a left behind account to
+be easily caught up with the target blockchain's tip. In the future this claim type
+will be dropped and a left-behind mirroring account will need to settle all
+missed state updates in order to be caught up.
+
+**JSON Schema**: [StateReset](StateReset.json)
+
+#### Fields:
+| Field | Type | Notes |
+|-------|------|-------|
+| `reset_state` | [`State`](#state) | Reset state |
+
+---
+
+### State
+
+**JSON Schema**: [State](State.json)
+
+`Array < uint8 ; length=32 >`
 
 ---
 
@@ -441,7 +586,12 @@ Submit arbitrary data along with a quorum of signatures from external verifiers
 
 ### FastSetAddress
 
-An Ed25519 Public Key
+A byte sequence that names an entity on or off the FastSet network,
+depending on the name of type which stores this value;
+typically encoded as an Ed25519 public key,
+but may have other formats including but not limited to:
+(a) Burn Address - a 32-byte string composed of all 0x00 bytes.
+Note: any funds sent to the burn address will be permenantly lost!
 
 **JSON Schema**: [FastSetAddress](FastSetAddress.json)
 
@@ -485,15 +635,76 @@ An Ed25519 signature
 
 ---
 
+### SignatureOrMultiSig
+
+**JSON Schema**: [SignatureOrMultiSig](SignatureOrMultiSig.json)
+
+#### Variants:
+| Name | Type | Notes |
+|------|------|-------|
+| `Signature` | [`Signature`](#signature) | |
+| `MultiSig` | [`MultiSig`](#multisig) | |
+
+---
+
+### MultiSig
+
+**JSON Schema**: [MultiSig](MultiSig.json)
+
+#### Fields:
+| Field | Type | Notes |
+|-------|------|-------|
+| `config` | [`MultiSigConfig`](#multisigconfig) | |
+| `signatures` | Array < ( [`PublicKeyBytes`](#publickeybytes), [`Signature`](#signature) ) > | |
+
+---
+
+### MultiSigConfig
+
+Together, determines the address of a multisig account.
+
+**JSON Schema**: [MultiSigConfig](MultiSigConfig.json)
+
+#### Fields:
+| Field | Type | Notes |
+|-------|------|-------|
+| `authorized_signers` | Array < [`PublicKeyBytes`](#publickeybytes) > | The accounts which may sign for a multisig transaction to be accepted |
+| `quorum` | [`Quorum`](#quorum) | The minimum number of accounts that must sign |
+| `nonce` | [`Nonce`](#nonce) | Arbitrary data. Useful for creating multiple distinct multisig accounts with the same committee/quorum. |
+
+---
+
+### VerifierSig
+
+**JSON Schema**: [VerifierSig](VerifierSig.json)
+
+#### Fields:
+| Field | Type | Notes |
+|-------|------|-------|
+| `verifier_addr` | [`PublicKeyBytes`](#publickeybytes) | |
+| `sig` | [`Signature`](#signature) | |
+
+---
+
 ### PageRequest
+
+A client->server RPC message used to request a bounded number of
+records from the server starting from a given index or offset.
+
+A client may safely issue multiple `PageRequest`s in parallel.
+
+To avoid requesting redundant information, when issuing parallel
+requests, ensure that the ranges `[r.token, r.token+r.limit)` for
+each request `r` are non-overlapping, where `r.token` defaults
+to `0` if `None`.
 
 **JSON Schema**: [PageRequest](PageRequest.json)
 
 #### Fields:
 | Field | Type | Notes |
 |-------|------|-------|
-| `limit` | uint | |
-| `token` | Option < Array < uint8 > > (optional) | |
+| `limit` | uint | The maximum number of records desired from the server. The server may return less records, but it will not return more. |
+| `token` | Option < uint64 > (optional) | The index or offset from which to begin querying records. If this field is absent, it defaults to offset 0 (equivalently, the index of the first record), i.e., the initial records will be returned. |
 
 ---
 
@@ -536,13 +747,15 @@ An Ed25519 signature
 
 ### Page<T>
 
+A server->client RPC message sent in response to a `PageRequest`.
+
 **JSON Schema**: [Page<T>](Page<T>.json)
 
 #### Fields:
 | Field | Type | Notes |
 |-------|------|-------|
-| `data` | Array < T > | |
-| `next_page_token` | Array < uint8 > | The token that should be used as NextPageToken::token in the next fetch |
+| `data` | Array < T > | The records returned from the server in response to a `PageRequest`. |
+| `next_page_token` | uint64 | A token that can be passed in a subsequent `PageRequest.token` field in order to continue querying the database from starting from the last record returned by this response. |
 
 ---
 
@@ -557,17 +770,17 @@ An Ed25519 signature
 
 ---
 
-### PerformanceInfoResponse
+### RpcPerformanceInfoResponse
 
 Performance information from the validator
 
-**JSON Schema**: [PerformanceInfoResponse](PerformanceInfoResponse.json)
+**JSON Schema**: [RpcPerformanceInfoResponse](RpcPerformanceInfoResponse.json)
 
 #### Fields:
 | Field | Type | Notes |
 |-------|------|-------|
-| `weak_finality_nanos` | uint128 | Average weak finality since validator started (in nanoseconds) |
-| `strong_finality_nanos` | uint128 | Average strong finality since validator started (in nanoseconds) |
+| `weak_finality_nanos` | uint64 | Average weak finality since validator started (in nanoseconds) |
+| `strong_finality_nanos` | uint64 | Average strong finality since validator started (in nanoseconds) |
 | `tps_last_second` | uint64 | Transactions in the last second since the query |
 | `tps_last_minute` | uint64 | Average (per second) transactions in the last minute since the query |
 | `tps_last_hour` | uint64 | Average (per second) transactions in the last hour since the query |
@@ -576,6 +789,7 @@ Performance information from the validator
 | `ops_last_hour` | uint64 | Average orders per second in the last hour. |
 | `signed_transactions` | uint64 | Number of signed transactions since validator started (includes not yet settled transactions) |
 | `settled_transactions` | uint64 | Number of fully processed transactions since validator started |
+| `accounts_count` | uint64 | Number of accounts |
 | `db_stats` | [`DbStats`](#dbstats) (optional) | DB stats |
 
 ---
@@ -588,6 +802,7 @@ Performance information from the validator
 | Field | Type | Notes |
 |-------|------|-------|
 | `channel_buffer_size` | uint | |
+| `rocksdb_props` | object | |
 
 ---
 
@@ -616,9 +831,30 @@ Performance information from the validator
 
 ---
 
+### TransactionInfo
+
+**JSON Schema**: [TransactionInfo](TransactionInfo.json)
+
+#### Fields:
+| Field | Type | Notes |
+|-------|------|-------|
+| `hash` | Array < uint8 ; length=32 > | |
+| `sender` | [`PublicKeyBytes`](#publickeybytes) | |
+| `recipient` | [`PublicKeyBytes`](#publickeybytes) | |
+| `nonce` | [`Nonce`](#nonce) | |
+| `claim` | [`ClaimType`](#claimtype) | |
+| `submission_timestamp_nanos` | uint128 | |
+
+---
+
 ### ValidatorName
 
-An Ed25519 Public Key
+A byte sequence that names an entity on or off the FastSet network,
+depending on the name of type which stores this value;
+typically encoded as an Ed25519 public key,
+but may have other formats including but not limited to:
+(a) Burn Address - a 32-byte string composed of all 0x00 bytes.
+Note: any funds sent to the burn address will be permenantly lost!
 
 **JSON Schema**: [ValidatorName](ValidatorName.json)
 
@@ -654,12 +890,13 @@ types of queries. Reflects the view of a single validator, which may be lagging 
 |-------|------|-------|
 | `sender` | [`PublicKeyBytes`](#publickeybytes) | The address of the account |
 | `balance` | [`Balance`](#balance) | Balance in native tokens of the account |
+| `state` | [`State`](#state) (optional) | State of a FastSet account that mirrors an Ethereum blockchain |
 | `next_nonce` | [`Nonce`](#nonce) | The next transaction from the account is required to have this nonce. |
 | `pending_confirmation` | [`ValidatedTransaction`](#validatedtransaction) (optional) | The transaction that has been validated by the current validator, but not yet confirmed (if requested) |
 | `requested_certificate` | [`TransactionCertificate`](#transactioncertificate) (optional) | A single transaction certificate (if requested) |
 | `requested_validated_transaction` | [`ValidatedTransaction`](#validatedtransaction) (optional) | A single validated transaction (if requested) |
 | `requested_received_transfers` | Array < [`TransactionCertificate`](#transactioncertificate) > | Certificates responding to transfers where this account is the recipient (if requested) |
-| `token_balance` | Array < ( Array < uint8 ; length=32 >, [`Balance`](#balance) ) > | Custom token balances of tokens held by this account (may not be all tokens held). |
+| `token_balance` | Array < ( Array < uint8 ; length=32 >, [`Balance`](#balance) ) > | Token balances of tokens held by this account (may not be all tokens held). |
 | `requested_claim_by_id` | [`ExternalClaim`](#externalclaim) (optional) | External claim by its ID (if requested) |
 | `requested_claims` | Array < [`TransactionWithHash`](#transactionwithhash) > | Multiple external claims (if requested) |
 
@@ -682,13 +919,15 @@ A Transaction along with the signature from one validator
 
 ### Page<T>
 
+A server->client RPC message sent in response to a `PageRequest`.
+
 **JSON Schema**: [Page<T>](Page<T>.json)
 
 #### Fields:
 | Field | Type | Notes |
 |-------|------|-------|
-| `data` | Array < T > | |
-| `next_page_token` | Array < uint8 > | The token that should be used as NextPageToken::token in the next fetch |
+| `data` | Array < T > | The records returned from the server in response to a `PageRequest`. |
+| `next_page_token` | uint64 | A token that can be passed in a subsequent `PageRequest.token` field in order to continue querying the database from starting from the last record returned by this response. |
 
 ---
 
@@ -706,13 +945,23 @@ A Transaction along with the signature from one validator
 
 ### PageRequest
 
+A client->server RPC message used to request a bounded number of
+records from the server starting from a given index or offset.
+
+A client may safely issue multiple `PageRequest`s in parallel.
+
+To avoid requesting redundant information, when issuing parallel
+requests, ensure that the ranges `[r.token, r.token+r.limit)` for
+each request `r` are non-overlapping, where `r.token` defaults
+to `0` if `None`.
+
 **JSON Schema**: [PageRequest](PageRequest.json)
 
 #### Fields:
 | Field | Type | Notes |
 |-------|------|-------|
-| `limit` | uint | |
-| `token` | Option < Array < uint8 > > (optional) | |
+| `limit` | uint | The maximum number of records desired from the server. The server may return less records, but it will not return more. |
+| `token` | Option < uint64 > (optional) | The index or offset from which to begin querying records. If this field is absent, it defaults to offset 0 (equivalently, the index of the first record), i.e., the initial records will be returned. |
 
 ---
 
@@ -777,4 +1026,4 @@ A Transaction along with its sender's signature
 | Field | Type | Notes |
 |-------|------|-------|
 | `transaction` | [`Transaction`](#transaction) | |
-| `signature` | [`Signature`](#signature) | |
+| `signature` | [`SignatureOrMultiSig`](#signatureormultisig) | |

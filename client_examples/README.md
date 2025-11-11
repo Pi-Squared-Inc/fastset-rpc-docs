@@ -1,8 +1,10 @@
 # FastSet Client Example
 
-This example shows how to sign and submit a transaction to the FastSet network. You will mainly
-interact with the validator's JSON-RPC API. More about the JSON-RPC API can be found in the
-[JSON-RPC documentation](/docs/validator/rpc.md).
+This example shows how to sign and submit a transaction to the FastSet network.
+
+You will mainly interact with the JSON-RPC API of the validator or proxy.
+
+More information can be found in the docs folder.
 
 ## Overview
 
