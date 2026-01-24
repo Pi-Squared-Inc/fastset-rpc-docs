@@ -2,46 +2,56 @@
 
 ## List of Endpoints
 
-- [`set_proxy_submitTransaction`](#set_proxy_submittransaction)
-- [`set_proxy_faucetDrip`](#set_proxy_faucetdrip)
-- [`set_proxy_getAccountInfo`](#set_proxy_getaccountinfo)
-- [`set_proxy_getTokenInfo`](#set_proxy_gettokeninfo)
-- [`set_proxy_getTransfers`](#set_proxy_gettransfers)
-- [`set_proxy_getClaims`](#set_proxy_getclaims)
-- [`set_proxy_getClaimsByAddress`](#set_proxy_getclaimsbyaddress)
-- [`set_proxy_getCertificateByNonce`](#set_proxy_getcertificatebynonce)
-- [`set_proxy_evmSignCertificate`](#set_proxy_evmsigncertificate)
+- [`proxy_submitTransaction`](#proxy_submittransaction)
+- [`proxy_faucetDrip`](#proxy_faucetdrip)
+- [`proxy_getAccountInfo`](#proxy_getaccountinfo)
+- [`proxy_getTokenInfo`](#proxy_gettokeninfo)
+- [`proxy_evmSignCertificate`](#proxy_evmsigncertificate)
 
 ---
 
-## `set_proxy_submitTransaction`
+## `proxy_submitTransaction`
 
-Submits a transaction to the proxy to be submitted and settled on the network.
-- Sends the signed transaction to all validators known to the proxy
-- Recieves back a signature from each one, assuming the transaction is valid.
-- Aggregates those signatures and sends the resulting certificate to each validator
+Submit a signed transaction to the proxy to be submitted and settled on the network.
 
-The signature is computed using ed25519 where:
+Upon receipt of the transaction, if the transaction is complete, the proxy will perform the following steps:
+
+- Submit the signed transaction to all validators known to the proxy;
+- Accumulate signatures from all validators which attest that the transaction is valid;
+- Submit a transaction certificate (composed of the transaction and a quorum of validator
+  signatures) to all validators known to the proxy.
+
+If the transaction is incomplete, the proxy will store the transaction and await additional
+requests which provide the missing information.
+
+Note that currently, the latter case can only occur when the transaction has [ClaimType](#claimtype) [ExternalClaim](#externalclaim)
+and has an incomplete list of verifier signatures (see `proxy_submitVerifierSig`).
+
+The sender's transaction signature is computed using ed25519 where:
 
 - the public key is stored in the `Transaction` struct's `sender` field
 - the message to be signed is the `Transaction` struct serialized using the [
   `BCS` format](https://github.com/zefchain/bcs) with the following special rules:
-    - Numerical string ([Amount](#amount)/[Balance](#balance)) fields are encoded as a litte-endian unsigned 256-bit number
-      as an array of uint8 of length 32.
+  - Numerical string ([Amount](#amount)/[Balance](#balance)) fields are encoded as a little-endian unsigned 256-bit number
+    as an array of uint8 of length 32.
 
 `BCS` serialization libraries are available for several languages:
 
 - Rust: the [zefchain BCS library](https://github.com/zefchain/bcs) as a [`serde`](https://serde.rs/) backend
 - Typescript/Javascript: the [Mysten Labs BCS library](https://www.npmjs.com/package/@mysten/bcs)
 
-Here is an [example implementation](/docs/client_examples/index.ts) of the serde and signing process using the `@mysten/bcs` and `@noble/ed25519` libraries.
+Here is an [example implementation](/docs/client_examples/index.ts) of the transaction signing process using the `@mysten/bcs` and `@noble/ed25519` libraries.
 
 Input:
 - `transaction`: a [Transaction](#transaction) of any [ClaimType](#claimtype)
-- `signature`: a [SignatureOrMultiSig](#signatureormultisig) over the transaction created by transaction.sender
+- `signature`: a [SignatureOrMultiSig](#signatureormultisig) over the transaction created by the transaction sender
+  (with the verifier signatures field set to the empty list prior to signing in the case of [ExternalClaim](#externalclaim)s)
 
-Returns:
-- A certificate for the transaction if the transaction was successfully submitted
+Returns: One of the following:
+
+- A `ProxySubmitTransactionResult` with a transaction certificate if the transaction is complete and was successfully submitted and validated;
+- An `IncompleteVerifierSigs` flag indicating that the transaction is incomplete and has been stored on the proxy for eventual completion and submission.
+
 
 
 **Parameters**:
@@ -53,22 +63,22 @@ Returns:
 
 **Returns**:
 
-[`TransactionCertificate`](#transactioncertificate)
+[`ProxySubmitTransactionResult`](#proxysubmittransactionresult)
 
 ---
 
-## `set_proxy_faucetDrip`
+## `proxy_faucetDrip`
 
-Distributes funds from the proxy's account to the specified account.
-- Results in the specified amount and of the specified token being added to the specified
-  account.
+Distribute funds from the proxy's account to the specified account.
+
+Results in the specified amount of the specified token being added to the specified
+account.
 
 Input:
 - `recipient`: [FastSetAddress](#fastsetaddress), the account that should recieve the funds.
 - `amount`: [Amount](#amount), The amount of funds that should be added.
 - `token_id`: Option<[TokenId](#tokenid)>, If `None`, the funds will be added in the form of the
   default token. If a [TokenId](#tokenid) is passed, the funds will be in that token.
-
 
 **Parameters**:
 
@@ -84,16 +94,21 @@ Input:
 
 ---
 
-## `set_proxy_getAccountInfo`
+## `proxy_getAccountInfo`
 
-Queries info for a specific account from some validator.
+Return information regarding a specific account from some validator known to the proxy.
 
 Input:
-- `address`: The account to query
-- `token_balances_filter`: If passed, only those tokens included in the list will be in the
-  returned map. Otherwise, all held tokens will be returned.
-- `certificatee_by_nonce`: If passed, the confirmed certificate with the requested nonce
-  wil be returned.
+- `address`: [FastSetAddress](#fastsetaddress) of the designated account
+- `token_balances_filter`: The set of token types for which a balance request will be made.
+  If this parameter is omitted, no custom token balances will be returned; if it is present and empty,
+  the balance of all tokens owned by this account will be queried.
+- `state_key_filter`: The set of state fields created by this account to be returned.
+  If this parameter is omitted, no state fields will be returned; if it is present and empty,
+  all state fields created by this account will be returned.
+- `certificate_by_nonce`: If passed, a list of transaction certificates within the nonce range
+  specified by this parameter submitted by account address will be returned
+  (omitting those which do not exist or have been pruned from the validator database).
 
 Returns:
 - [AccountInfoResponse](#accountinforesponse) for the requested account
@@ -104,7 +119,8 @@ Returns:
 |------|------|
 | `address` | [`FastSetAddress`](#fastsetaddress) |
 | `token_balances_filter` | Option< Vec< [`TokenId`](#tokenid) > > |
-| `certificate_by_nonce` | Option< [`Nonce`](#nonce) > |
+| `state_key_filter` | Option< Vec< [`StateKey`](#statekey) > > |
+| `certificate_by_nonce` | Option< [`NonceRange`](#noncerange) > |
 
 **Returns**:
 
@@ -112,12 +128,12 @@ Returns:
 
 ---
 
-## `set_proxy_getTokenInfo`
+## `proxy_getTokenInfo`
 
-Get token info from one of the validators
+Return information regarding a set of tokens from some validator known to the proxy.
 
 Input:
-- `token_ids`: an array of 32 byte arrays representing token ids to query
+- `token_ids`: an array of [TokenId](#tokenid)s to look up
 
 Returns:
 - [TokenInfoResponse](#tokeninforesponse)(#tokeninforesponse) containing data for all requested tokens
@@ -134,105 +150,15 @@ Returns:
 
 ---
 
-## `set_proxy_getTransfers`
+## `proxy_evmSignCertificate`
 
-Get paginated transfers from one of the validators
-
-Input:
-- `page`: PageRequest defining the page to return
-
-Returns:
-- Page<Timed<Transfer>> containing all transfers on the requested page
-
-**Parameters**:
-
-| Name | Type |
-|------|------|
-| `page` | [`PageRequest`](#pagerequest) |
-
-**Returns**:
-
-Page< Timed< [`TransactionInfo`](#transactioninfo) > >
-
----
-
-## `set_proxy_getClaims`
-
-Get paginated claims fromm one of the validators
+Return a proxy-signed, Solidity ABI-encoded [TransactionCertificate](#transactioncertificate) for EVM verification.
 
 Input:
-- `confirmed`: Request confirmed claims instead of pending
-- `page`: PageRequest defining the page to return
+- `certificate`: [TransactionCertificate](#transactioncertificate) to be encoded and signed
 
 Returns:
-- Page<Timed<ExternalClaim>> containing all claims on the requested page
-
-**Parameters**:
-
-| Name | Type |
-|------|------|
-| `page` | [`PageRequest`](#pagerequest) |
-
-**Returns**:
-
-Page< Timed< [`ExternalClaim`](#externalclaim) > >
-
----
-
-## `set_proxy_getClaimsByAddress`
-
-Get all external claims sent by this address from one of the validators
-
-Input:
-- `address`: Query claims sent by this address
-- `page`: PageRequest defining the page to return
-
-Returns:
-- Array<TransactionWithHash> containing all on the requested page sent by the requesed
-  adddress
-
-**Parameters**:
-
-| Name | Type |
-|------|------|
-| `address` | [`FastSetAddress`](#fastsetaddress) |
-| `page` | [`Pagination`](#pagination) |
-
-**Returns**:
-
-Vec< [`TransactionWithHash`](#transactionwithhash) >
-
----
-
-## `set_proxy_getCertificateByNonce`
-
-Get a full transaction certificate for
-a given sender and nonce
-
-**Parameters**:
-
-| Name | Type |
-|------|------|
-| `sender` | [`FastSetAddress`](#fastsetaddress) |
-| `nonce` | [`Nonce`](#nonce) |
-
-**Returns**:
-
-[`TransactionCertificate`](#transactioncertificate)
-
----
-
-## `set_proxy_evmSignCertificate`
-
-Check a fastset certificate and sign the underlying transaction
-with the proxy's secp256k1 key, for EVM verification.
-
-Input:
-- `certificate`: The certificate to check
-
-Returns:
-- [CrossSignResponse] containing the secp256k1 signature and
-  the extracted transaction
+- [CrossSignResponse](#crosssignresponse) containing the proxy's secp256k1 transaction signature and the ABI-encoded transaction
 
 **Parameters**:
 
@@ -242,7 +168,7 @@ Returns:
 
 **Returns**:
 
-CrossSignResponse
+[`CrossSignResponse`](#crosssignresponse)
 
 ---
 
@@ -257,6 +183,7 @@ One of various types of actions that can be packed into a transaction
 **JSON Schema**: [ClaimType](ClaimType.json)
 
 #### Variants:
+
 | Name | Type | Notes |
 |------|------|-------|
 | `TokenTransfer` | [`TokenTransfer`](#tokentransfer) | Transfer or burn tokens (that is, transfer tokens to the burn address) |
@@ -267,6 +194,10 @@ One of various types of actions that can be packed into a transaction
 | `StateUpdate` | [`StateUpdate`](#stateupdate) | Update the state of an Ethereum blockchain mirroring account |
 | `ExternalClaim` | [`ExternalClaim`](#externalclaim) | Submit arbitrary data to be settled on the network |
 | `StateReset` | [`StateReset`](#statereset) | Reset the state of an Ethereum blockchain mirroring account |
+| `JoinCommittee` | ValidatorConfig | Join Committee request Since no escrow is currently involved with the requests we do not check the unicity of the requests and just process them in the order of their timestamps |
+| `LeaveCommittee` |  | Leave Committee request Since no escrow is currently involved with the requests we do not check the unicity of the requests and just process them in the order of their timestamps |
+| `ChangeCommittee` | CommitteeChange | Change Committee request |
+| `Batch` | [`OperationBundle`](#operationbundle) | Perform several operations |
 
 ---
 
@@ -277,13 +208,15 @@ Action that can be submitted and confirmed on the network
 **JSON Schema**: [Transaction](Transaction.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `sender` | [`PublicKeyBytes`](#publickeybytes) | Address of sender, and intended signer of this transaction |
-| `recipient` | [`Address`](#address) | Address of the recipient or the burn address |
+| `recipient` | [`PublicKeyBytes`](#publickeybytes) | Address of the recipient or the burn address |
 | `nonce` | [`Nonce`](#nonce) | A sequence number. Transactions sent by the same account are ordered by nonce. |
 | `timestamp_nanos` | uint128 | Nanos since the Unix epoch. |
 | `claim` | [`ClaimType`](#claimtype) | Type-dependent data |
+| `archival` | boolean | Whether this transaction should be archived. When an archived transaction is confirmed on a validator, subsequent is_settled requests to that validator must succeed. |
 
 ---
 
@@ -317,6 +250,7 @@ Transfer tokens to another address
 **JSON Schema**: [TokenTransfer](TokenTransfer.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `token_id` | Array < uint8 ; length=32 > | Token ID to transfer |
@@ -334,6 +268,7 @@ so it depends also on the creator and the [Nonce].
 **JSON Schema**: [TokenCreation](TokenCreation.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `token_name` | string | Human-readable name |
@@ -351,6 +286,7 @@ Manage an existing token.
 **JSON Schema**: [TokenManagement](TokenManagement.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `token_id` | Array < uint8 ; length=32 > | The id of the token to be managed |
@@ -364,12 +300,14 @@ Manage an existing token.
 ### Mint
 
 Create more funds of a token.
-The sender of the [Transaction] must be a known
-mint of the token.
+The sender of the [Transaction] must be a current mint of the token.
+Warning: This is not independent of a token management operation that
+removes the sender of this transaction from the list of mints.
 
 **JSON Schema**: [Mint](Mint.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `token_id` | Array < uint8 ; length=32 > | Token ID. This is the hash of the TokenCreation transaction that created the token. This is calculated using the keccak256 hash over the data encoded in the same way as for signing. |
@@ -384,10 +322,83 @@ Submit arbitrary data along with a quorum of signatures from external verifiers
 **JSON Schema**: [ExternalClaim](ExternalClaim.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `claim` | [`ExternalClaimBody`](#externalclaimbody) | The claim itself plus the required verifier quorum |
-| `signatures` | Array < ( [`PublicKeyBytes`](#publickeybytes), [`Signature`](#signature) ) > | At least `claim.verifier_quorum` signatures over `claim` by members of `claim.verifier_committee` |
+| `signatures` | Array < [`VerifierSig`](#verifiersig) > | At least `claim.verifier_quorum` signatures over the enclosing `Transaction` (with this field set to the empty list) by members of `claim.verifier_committee` |
+
+---
+
+### OperationBundle
+
+**JSON Schema**: [OperationBundle](OperationBundle.json)
+
+`Array < [`Operation`](#operation) >`
+
+---
+
+### Operation
+
+One of various types of actions that be put in a multi-operation transaction
+Payload structs are different from the top-level [ClaimType] where we
+need to support multiple operations with different receivers
+
+**JSON Schema**: [Operation](Operation.json)
+
+#### Variants:
+
+| Name | Type | Notes |
+|------|------|-------|
+| `TokenTransfer` | [`TokenTransferOperation`](#tokentransferoperation) | Transfer or burn tokens (that is, transfer tokens to the burn address) |
+| `TokenCreation` | [`TokenCreation`](#tokencreation) | Create custom token |
+| `TokenManagement` | [`TokenManagement`](#tokenmanagement) | Modify custom token |
+| `Mint` | [`MintOperation`](#mintoperation) | Mint funds in a custom token |
+| `StateInitialization` | [`StateInitialization`](#stateinitialization) | Initialize the state of an Ethereum blockchain mirroring account |
+| `StateUpdate` | [`StateUpdate`](#stateupdate) | Update the state of an Ethereum blockchain mirroring account |
+| `ExternalClaim` | [`ExternalClaim`](#externalclaim) | Submit arbitrary data to be settled on the network |
+| `StateReset` | [`StateReset`](#statereset) | Reset the state of an Ethereum blockchain mirroring account |
+| `JoinCommittee` | ValidatorConfig | Join Committee request Since no escrow is currently involved with the requests we do not check the unicity of the requests and just process them in the order of their timestamps |
+| `LeaveCommittee` |  | Leave Committee request Since no escrow is currently involved with the requests we do not check the unicity of the requests and just process them in the order of their timestamps |
+| `ChangeCommittee` | CommitteeChange | Change Committee request |
+
+---
+
+### TokenTransferOperation
+
+Transfer tokens to another address.
+This is a variant of [TokenTransfer] that adds a recipient field.
+
+**JSON Schema**: [TokenTransferOperation](TokenTransferOperation.json)
+
+#### Fields:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `token_id` | Array < uint8 ; length=32 > | Token ID to transfer |
+| `recipient` | [`PublicKeyBytes`](#publickeybytes) | Recipient |
+| `amount` | [`Amount`](#amount) | Amount to transfer |
+| `user_data` | [`UserData`](#userdata) | Extra data field to associate with this transfer |
+
+---
+
+### MintOperation
+
+Create more funds of a token.
+The sender of the [Transaction] must be a current mint of the token.
+Warning: This is not independent of a token management operation that
+removes the sender of this transaction from the list of mints.
+This is a variant of [Mint] that adds a recipient field.
+
+**JSON Schema**: [MintOperation](MintOperation.json)
+
+#### Fields:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `token_id` | Array < uint8 ; length=32 > | Token ID. This is the hash of the TokenCreation transaction that created the token. This is calculated using the keccak256 hash over the data encoded in the same way as for signing. |
+| `recipient` | [`PublicKeyBytes`](#publickeybytes) | Recipient of the new funds |
+| `amount` | [`Amount`](#amount) | Amount to mint |
 
 ---
 
@@ -396,6 +407,7 @@ Submit arbitrary data along with a quorum of signatures from external verifiers
 **JSON Schema**: [ExternalClaimBody](ExternalClaimBody.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `verifier_committee` | Array < [`PublicKeyBytes`](#publickeybytes) > | Set of verifiers (regular  FastSet addresses) that can sign for this ExternalClaim |
@@ -406,14 +418,16 @@ Submit arbitrary data along with a quorum of signatures from external verifiers
 
 ### StateInitialization
 
-Initialize the state of a blockchain mirroring account
+Initialize one state cell of a blockchain mirroring account
 
 **JSON Schema**: [StateInitialization](StateInitialization.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
-| `initial_state` | State | Initial state |
+| `key` | [`StateKey`](#statekey) | Key to initialize |
+| `initial_state` | [`State`](#state) | Initial state |
 
 ---
 
@@ -424,12 +438,30 @@ Update the state of a blockchain mirroring account
 **JSON Schema**: [StateUpdate](StateUpdate.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
-| `previous_state` | State | Previous state |
-| `next_state` | State | Next state |
+| `key` | [`StateKey`](#statekey) | Key to update |
+| `previous_state` | [`State`](#state) | Previous state |
+| `next_state` | [`State`](#state) | Next state |
 | `compute_claim_tx_hash` | Array < uint8 ; length=32 > | |
 | `compute_claim_tx_timestamp` | uint128 | |
+
+---
+
+### State
+
+**JSON Schema**: [State](State.json)
+
+`Array < uint8 ; length=32 >`
+
+---
+
+### StateKey
+
+**JSON Schema**: [StateKey](StateKey.json)
+
+`Array < uint8 ; length=32 >`
 
 ---
 
@@ -444,22 +476,11 @@ missed state updates in order to be caught up.
 **JSON Schema**: [StateReset](StateReset.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
-| `reset_state` | State | Reset state |
-
----
-
-### Address
-
-A byte sequence that names an entity on the FastSet network
-
-**JSON Schema**: [Address](Address.json)
-
-#### Variants:
-| Name | Type | Notes |
-|------|------|-------|
-| `FastSet` | [`PublicKeyBytes`](#publickeybytes) | A byte sequence that names an entity on the FastSet network; typically encoded as an Ed25519 public key, but may have other formats including but not limited to: (a) Burn Address - a 32-byte string composed of all 0x00 bytes. Note: any funds sent to the burn address will be permenantly lost! |
+| `key` | [`StateKey`](#statekey) | Key to reset |
+| `reset_state` | [`State`](#state) | Reset state |
 
 ---
 
@@ -468,6 +489,7 @@ A byte sequence that names an entity on the FastSet network
 **JSON Schema**: [AddressChange](AddressChange.json)
 
 #### Variants:
+
 | Name | Type | Notes |
 |------|------|-------|
 | `Add` | array | |
@@ -533,6 +555,7 @@ Encodes metadata about a custom token
 **JSON Schema**: [TokenMetadata](TokenMetadata.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `update_id` | [`Nonce`](#nonce) | number of management operations applied to some token |
@@ -559,6 +582,7 @@ An Ed25519 signature
 **JSON Schema**: [SignatureOrMultiSig](SignatureOrMultiSig.json)
 
 #### Variants:
+
 | Name | Type | Notes |
 |------|------|-------|
 | `Signature` | [`Signature`](#signature) | |
@@ -571,6 +595,7 @@ An Ed25519 signature
 **JSON Schema**: [MultiSig](MultiSig.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `config` | [`MultiSigConfig`](#multisigconfig) | |
@@ -585,11 +610,25 @@ Together, determines the address of a multisig account.
 **JSON Schema**: [MultiSigConfig](MultiSigConfig.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `authorized_signers` | Array < [`PublicKeyBytes`](#publickeybytes) > | The accounts which may sign for a multisig transaction to be accepted |
 | `quorum` | [`Quorum`](#quorum) | The minimum number of accounts that must sign |
 | `nonce` | [`Nonce`](#nonce) | Arbitrary data. Useful for creating multiple distinct multisig accounts with the same committee/quorum. |
+
+---
+
+### VerifierSig
+
+**JSON Schema**: [VerifierSig](VerifierSig.json)
+
+#### Fields:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `verifier_addr` | [`PublicKeyBytes`](#publickeybytes) | |
+| `sig` | [`Signature`](#signature) | |
 
 ---
 
@@ -608,6 +647,7 @@ to `0` if `None`.
 **JSON Schema**: [PageRequest](PageRequest.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `limit` | uint | The maximum number of records desired from the server. The server may return less records, but it will not return more. |
@@ -620,6 +660,7 @@ to `0` if `None`.
 **JSON Schema**: [Timed<T>](Timed<T>.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `data` | T | |
@@ -632,6 +673,7 @@ to `0` if `None`.
 **JSON Schema**: [Pagination](Pagination.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `limit` | Option < uint > (optional) | |
@@ -646,6 +688,7 @@ A server->client RPC message sent in response to a `PageRequest`.
 **JSON Schema**: [Page<T>](Page<T>.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `data` | Array < T > | The records returned from the server in response to a `PageRequest`. |
@@ -658,9 +701,24 @@ A server->client RPC message sent in response to a `PageRequest`.
 **JSON Schema**: [TokenInfoResponse](TokenInfoResponse.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `requested_token_metadata` | Array < ( Array < uint8 ; length=32 >, [`TokenMetadata`](#tokenmetadata) ) > | |
+
+---
+
+### ProxySubmitTransactionResult
+
+**JSON Schema**: [ProxySubmitTransactionResult](ProxySubmitTransactionResult.json)
+
+#### Variants:
+
+| Name | Type | Notes |
+|------|------|-------|
+| `Success` | [`TransactionCertificate`](#transactioncertificate) | |
+| `IncompleteVerifierSigs` | array | |
+| `IncompleteMultiSig` | array | |
 
 ---
 
@@ -669,11 +727,12 @@ A server->client RPC message sent in response to a `PageRequest`.
 **JSON Schema**: [TransactionInfo](TransactionInfo.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `hash` | Array < uint8 ; length=32 > | |
 | `sender` | [`PublicKeyBytes`](#publickeybytes) | |
-| `recipient` | [`Address`](#address) | |
+| `recipient` | [`PublicKeyBytes`](#publickeybytes) | |
 | `nonce` | [`Nonce`](#nonce) | |
 | `claim` | [`ClaimType`](#claimtype) | |
 | `submission_timestamp_nanos` | uint128 | |
@@ -704,18 +763,17 @@ types of queries. Reflects the view of a single validator, which may be lagging 
 **JSON Schema**: [AccountInfoResponse](AccountInfoResponse.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `sender` | [`PublicKeyBytes`](#publickeybytes) | The address of the account |
 | `balance` | [`Balance`](#balance) | Balance in native tokens of the account |
 | `next_nonce` | [`Nonce`](#nonce) | The next transaction from the account is required to have this nonce. |
 | `pending_confirmation` | [`ValidatedTransaction`](#validatedtransaction) (optional) | The transaction that has been validated by the current validator, but not yet confirmed (if requested) |
-| `requested_certificate` | [`TransactionCertificate`](#transactioncertificate) (optional) | A single transaction certificate (if requested) |
+| `requested_state` | Array < ( [`StateKey`](#statekey), [`State`](#state) ) > | The keys and values of the account's state as requested |
+| `requested_certificates` | Option < Array < [`TransactionCertificate`](#transactioncertificate) > > (optional) | A single transaction certificate (if requested) |
 | `requested_validated_transaction` | [`ValidatedTransaction`](#validatedtransaction) (optional) | A single validated transaction (if requested) |
-| `requested_received_transfers` | Array < [`TransactionCertificate`](#transactioncertificate) > | Certificates responding to transfers where this account is the recipient (if requested) |
 | `token_balance` | Array < ( Array < uint8 ; length=32 >, [`Balance`](#balance) ) > | Token balances of tokens held by this account (may not be all tokens held). |
-| `requested_claim_by_id` | [`ExternalClaim`](#externalclaim) (optional) | External claim by its ID (if requested) |
-| `requested_claims` | Array < [`TransactionWithHash`](#transactionwithhash) > | Multiple external claims (if requested) |
 
 ---
 
@@ -726,6 +784,7 @@ A Transaction along with the signature from one validator
 **JSON Schema**: [ValidatedTransaction](ValidatedTransaction.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `value` | [`TransactionEnvelope`](#transactionenvelope) | |
@@ -741,6 +800,7 @@ A server->client RPC message sent in response to a `PageRequest`.
 **JSON Schema**: [Page<T>](Page<T>.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `data` | Array < T > | The records returned from the server in response to a `PageRequest`. |
@@ -753,6 +813,7 @@ A server->client RPC message sent in response to a `PageRequest`.
 **JSON Schema**: [Timed<T>](Timed<T>.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `data` | T | |
@@ -775,6 +836,7 @@ to `0` if `None`.
 **JSON Schema**: [PageRequest](PageRequest.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `limit` | uint | The maximum number of records desired from the server. The server may return less records, but it will not return more. |
@@ -787,6 +849,7 @@ to `0` if `None`.
 **JSON Schema**: [Pagination](Pagination.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `limit` | Option < uint > (optional) | |
@@ -799,6 +862,7 @@ to `0` if `None`.
 **JSON Schema**: [TokenInfoResponse](TokenInfoResponse.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `requested_token_metadata` | Array < ( Array < uint8 ; length=32 >, [`TokenMetadata`](#tokenmetadata) ) > | |
@@ -812,24 +876,11 @@ A Transaction along with a quorum of validator signatures
 **JSON Schema**: [TransactionCertificate](TransactionCertificate.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `envelope` | [`TransactionEnvelope`](#transactionenvelope) | |
 | `signatures` | Array < ( [`PublicKeyBytes`](#publickeybytes), [`Signature`](#signature) ) > | |
-
----
-
-### TransactionWithHash
-
-A Transaction along with its keccak256 hash, i.e. its ID.
-
-**JSON Schema**: [TransactionWithHash](TransactionWithHash.json)
-
-#### Fields:
-| Field | Type | Notes |
-|-------|------|-------|
-| `transaction` | [`Transaction`](#transaction) | |
-| `hash` | Array < uint8 ; length=32 > | Calculated using the keccak256 hash over the data encoded in the same way as for signing. |
 
 ---
 
@@ -840,7 +891,35 @@ A Transaction along with its sender's signature
 **JSON Schema**: [TransactionEnvelope](TransactionEnvelope.json)
 
 #### Fields:
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `transaction` | [`Transaction`](#transaction) | |
 | `signature` | [`SignatureOrMultiSig`](#signatureormultisig) | |
+
+---
+
+### CrossSignResponse
+
+**JSON Schema**: [CrossSignResponse](CrossSignResponse.json)
+
+#### Fields:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `format` | string | The type of signature produced. - "eip191-abi"   An EIP-191 (version 0x45 (E)) signature of the ABI-encoded   serialization of the transaction. |
+| `signature` | string | signature in hex format |
+| `transaction` | Array < uint8 > | The ABI encoded transaction whose certificate was checked by the proxy |
+
+---
+
+### NonceRange
+
+**JSON Schema**: [NonceRange](NonceRange.json)
+
+#### Fields:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `start` | [`Nonce`](#nonce) | |
+| `limit` | uint | |
