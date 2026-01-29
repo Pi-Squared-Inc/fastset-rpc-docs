@@ -1,0 +1,13 @@
+[package]
+name = "rust-examples"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bnum = "0.13.0"
+ed25519 = "2.2.3"
+ed25519-dalek = { version = "2.2.0", features = ["rand_core", "batch", "serde"] }
+jsonrpsee = { version = "0.26.0", features = ["macros", "client"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_arrays = "0.2.0"
+thiserror = "2.0.18"
