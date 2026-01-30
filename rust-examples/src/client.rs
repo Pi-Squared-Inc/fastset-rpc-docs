@@ -3,7 +3,7 @@ use jsonrpsee::proc_macros::rpc;
 use serde::{Deserialize, Serialize};
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum ProxySubmitTransactionResult {
     Success(TransactionCertificate),
     IncompleteVerifierSigs(),

@@ -1,23 +1,54 @@
-use std::{fmt::{Display, Formatter}, str::FromStr};
+use std::{
+    fmt::{Display, Formatter},
+    str::FromStr,
+};
 
-use bnum::{BInt, BUint, types::U256};
+use bech32::{Bech32m, Hrp};
+use bnum::{BInt, BUint, cast::As as _, types::U256};
+use ed25519_dalek::{self as dalek, Signer};
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize, de::Error as DesError};
-use ed25519_dalek as dalek;
 use thiserror::Error;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PublicKeyBytes(pub [u8; dalek::PUBLIC_KEY_LENGTH]);
+
+/// Convert address to string in default format (bech32m)
+pub fn encode_address(key: &PublicKeyBytes) -> String {
+    encode_address_bech32m(key)
+}
+
+/// BIP-173 requirements are that the HRP is ASCII in range [33-126]
+/// and does not mix uppercase and lowercase.
+const ADDRESS_HRP: Hrp = Hrp::parse_unchecked("set");
+pub fn encode_address_bech32m(key: &PublicKeyBytes) -> String {
+    bech32::encode::<Bech32m>(ADDRESS_HRP, &key.0).expect("bech32m encoding failed")
+}
+
+impl Display for PublicKeyBytes {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(encode_address(self).as_str())
+    }
+}
 
 pub type FastSetAddress = PublicKeyBytes;
 pub type ValidatorName = PublicKeyBytes;
 
-#[derive(Serialize, Deserialize)]
+pub struct KeyPair(dalek::SigningKey);
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Nonce(u64);
 
-#[derive(Serialize, Deserialize)]
+impl Display for Nonce {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(format!("{}", self.0).as_str())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Quorum(u64);
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct TokenId(pub [u8; 32]);
 
@@ -30,6 +61,12 @@ impl TokenId {
     #[inline]
     pub fn native() -> Self {
         NATIVE_TOKEN_ID
+    }
+}
+
+impl Display for TokenId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&hex::encode(self.0))
     }
 }
 
@@ -77,6 +114,12 @@ impl<'de> Deserialize<'de> for Amount {
     }
 }
 
+impl Display for Amount {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("Amount({})", self.0))
+    }
+}
+
 #[derive(Debug)]
 pub struct ParseAmountError;
 
@@ -94,6 +137,12 @@ impl FromStr for Amount {
         Ok(Self(
             U256::from_str_radix(s, 16).map_err(|_| ParseAmountError)?,
         ))
+    }
+}
+
+impl From<u64> for Amount {
+    fn from(value: u64) -> Self {
+        Amount(value.as_())
     }
 }
 
@@ -142,6 +191,13 @@ impl<'de> Deserialize<'de> for Balance {
         }
     }
 }
+
+impl std::fmt::Display for Balance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug)]
 pub enum BalanceFromStrError {
     ParseIntError,
@@ -176,7 +232,7 @@ impl TryFrom<I320> for Balance {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct UserData(pub Option<[u8; 32]>);
 
 #[derive(Serialize, Deserialize)]
@@ -191,10 +247,45 @@ pub struct NonceRange {
     pub limit: usize,
 }
 
-#[derive(Serialize, Deserialize)]
+/// Something that we know how to hash and sign.
+pub trait Signable<Hasher> {
+    fn write(&self, hasher: &mut Hasher);
+}
+
+/// Activate the blanket implementation of `Signable` based on serde and BCS.
+/// * We use `serde_name` to extract a seed from the name of structs and enums.
+/// * We use `BCS` to generate canonical bytes suitable for hashing and signing.
+pub trait BcsSignable: Serialize + serde::de::DeserializeOwned {}
+
+impl<T, Hasher> Signable<Hasher> for T
+where
+    T: BcsSignable,
+    Hasher: std::io::Write,
+{
+    fn write(&self, hasher: &mut Hasher) {
+        let name = serde_name::trace_name::<Self>().expect("Self must be a struct or an enum");
+        // Note: This assumes that names never contain the separator `::`.
+        write!(hasher, "{}::", name).expect("Hasher should not fail");
+        bcs::serialize_into(hasher, &self).expect("Message serialization should not fail");
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Signature(#[serde(with = "serde_arrays")] pub ed25519::SignatureBytes);
 
-#[derive(Serialize, Deserialize)]
+impl Signature {
+    pub fn new<T>(value: &T, secret: &KeyPair) -> Self
+    where
+        T: Signable<Vec<u8>>,
+    {
+        let mut message = Vec::new();
+        value.write(&mut message);
+        let signature = secret.0.sign(&message);
+        Signature(signature.to_bytes())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MultiSigConfig {
     /// The accounts which may sign for a multisig transaction to be accepted
     pub authorized_signers: Vec<FastSetAddress>,
@@ -205,18 +296,17 @@ pub struct MultiSigConfig {
     pub nonce: Nonce,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MultiSig {
     pub config: MultiSigConfig,
     pub signatures: Vec<(FastSetAddress, Signature)>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum SignatureOrMultiSig {
     Signature(Signature),
     MultiSig(MultiSig),
 }
-
 
 #[derive(Serialize, Deserialize)]
 pub struct CrossSignResponse {
@@ -235,7 +325,7 @@ pub struct CrossSignResponse {
 // We now define the set of basic claims and operations
 // ====================================================
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TokenTransfer {
     /// Token ID to transfer
     pub token_id: TokenId,
@@ -245,7 +335,6 @@ pub struct TokenTransfer {
     pub user_data: UserData,
 }
 
-
 // ============================
 // We now define the claim type
 // ============================
@@ -253,7 +342,7 @@ pub struct TokenTransfer {
 // A "claim" is a concept on FastSet that drives state changes on the FastSet network. It is akin to
 // the "calldata" of a transaction on Ethereum. There are many types of claims, but in this example,
 // others are omitted since we are interested in the Transfer claim.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum ClaimType {
     /// Transfer or burn tokens (that is, transfer tokens to the burn address)
     TokenTransfer(TokenTransfer),
@@ -263,7 +352,7 @@ pub enum ClaimType {
 // We now define transactions, envelopes, and certificates
 // =======================================================
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Transaction {
     /// Address of sender, and intended signer of this transaction
     pub sender: FastSetAddress,
@@ -281,10 +370,23 @@ pub struct Transaction {
     pub archival: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+impl BcsSignable for Transaction {}
+
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionEnvelope {
     pub transaction: Transaction,
     pub signature: SignatureOrMultiSig,
+}
+
+impl TransactionEnvelope {
+    pub fn new(transaction: Transaction, secret: &KeyPair) -> Self {
+        let signature = Signature::new(&transaction, secret);
+        Self {
+            transaction,
+            signature: SignatureOrMultiSig::Signature(signature),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -294,7 +396,7 @@ pub struct ValidatedTransaction {
     pub signature: Signature,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionCertificate {
     pub envelope: TransactionEnvelope,
     pub signatures: Vec<(ValidatorName, Signature)>,
@@ -326,11 +428,18 @@ pub struct TokenInfoResponse {
     pub requested_token_metadata: Vec<(TokenId, Option<TokenMetadata>)>,
 }
 
-
-
 /// FastSet core errors. Only protocol-related errors should be in here.
 #[derive(Debug, Serialize, Deserialize, Error)]
 pub enum FastSetError {
     #[error("Account balance overflow.")]
     BalanceOverflow,
+}
+
+pub fn get_key_pair() -> (FastSetAddress, KeyPair) {
+    let mut csprng = OsRng;
+    let keypair = dalek::SigningKey::generate(&mut csprng);
+    (
+        PublicKeyBytes(keypair.verifying_key().to_bytes()),
+        KeyPair(keypair),
+    )
 }
