@@ -1,0 +1,19 @@
+[package]
+name = "rust-examples"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bcs = "0.1.6"
+bech32 = "0.11.1"
+bnum = "0.13.0"
+ed25519 = "2.2"
+ed25519-dalek = { version = "2.2", features = ["rand_core", "batch", "serde"] }
+hex = "0.4.3"
+jsonrpsee = { version = "0.26.0", features = ["macros", "client"] }
+rand = "0.8.5"
+serde = { version = "1.0.228", features = ["derive"] }
+serde-name = "0.2.1"
+serde_arrays = "0.2.0"
+thiserror = "2.0.18"
+tokio = { version = "1.49.0", features = ["full", "macros"] }
