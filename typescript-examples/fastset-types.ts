@@ -118,6 +118,7 @@ const TransactionBcs = bcs.struct("Transaction", {
     nonce: NonceBcs,
     timestamp_nanos: bcs.u128(),
     claim: ClaimType,
+    archival: bcs.bool(),
 });
 type Transaction = InferBcsInput<typeof TransactionBcs>;
 

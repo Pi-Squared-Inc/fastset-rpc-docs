@@ -65,6 +65,7 @@ const transaction = {
     recipient: recipientPubKey,
     nonce, // an incorrect nonce leads to an invalid txn
     timestamp_nanos: BigInt(Date.now()) * 1_000_000n, // current time in nanoseconds
+    archival: false,
     claim: {
         TokenTransfer: {
             token_id: SET_TOKEN_ID,
