@@ -196,15 +196,16 @@ async function request(url: string, method: string, params: any): Promise<any> {
     if (result.status !== 200) {
         throw new Error(`JSON-RPC HTTP response had non-200 status code: ${util.inspect(result)}`);
     }
+    let json
     try {
-      const json = result.json();
-      if (json.error) {
-          throw new Error(`JSON-RPC Request failed with error: ${JSON.stringify(json.error)}`);
-      }
-      return json;
+      json = await result.json();
     } catch (err) {
       throw new Error(`JSON-RPC Response was not well-formed JSON: ${util.inspect(result)}`);
     }
+    if (json.error) {
+        throw new Error(`JSON-RPC Request failed with error: ${JSON.stringify(json.error)}`);
+    }
+    return json;
 }
 
 function buildJsonRpcRequest(id: number, method: string, params: any) {
