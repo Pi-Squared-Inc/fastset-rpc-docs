@@ -1,6 +1,7 @@
 import { bcs, BcsType, type InferBcsInput } from "@mysten/bcs";
 import * as ed from "@noble/ed25519";
 import { sha512 } from "@noble/hashes/sha2";
+import { keccak_256 } from "@noble/hashes/sha3";
 import * as util from "util";
 
 export {
@@ -11,6 +12,7 @@ export {
     proxy_getAccountInfo,
     proxy_submitTransaction,
     proxy_faucetDrip,
+    computeTokenId,
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -77,7 +79,12 @@ const AmountBcs = bcs.u256().transform({
     // CAUTION: When we build a transaction object, we must use a hex encoded string because the
     // validator expects amounts to be in hex. However, bcs.u256() by default expects a decimal
     // string. Therefore, we must transform the input amount from hex to decimal here.
-    input: (val) => hexToDecimal(val.toString()),
+    input: (val) => {
+        if (typeof val === 'string' && val.startsWith('0x')) {
+            return BigInt(val).toString();
+        }
+        return hexToDecimal(val.toString());
+    },
 });
 type Amount = InferBcsInput<typeof AmountBcs>;
 
@@ -97,15 +104,87 @@ const TokenTransfer = bcs.struct("TokenTransfer", {
     user_data: UserData,
 });
 
+const TokenCreation = bcs.struct("TokenCreation", {
+    token_name: bcs.string(),
+    decimals: bcs.u8(),
+    initial_amount: AmountBcs,
+    mints: bcs.vector(bcs.bytes(32)),
+    user_data: bcs.option(bcs.bytes(32)),
+});
+
+// AddressChange for TokenManagement
+// Verified via testing: AddressChange must be a tuple variant
+const AddressChange = bcs.enum("AddressChange", {
+    Add: bcs.tuple([]),
+    Remove: bcs.tuple([]),
+});
+
+const TokenManagement = bcs.struct("TokenManagement", {
+    token_id: bcs.bytes(32),
+    update_id: bcs.u64(), 
+    new_admin: bcs.option(bcs.bytes(32)),
+    mints: bcs.vector(bcs.tuple([AddressChange, bcs.bytes(32)])),
+    user_data: bcs.option(bcs.bytes(32)),
+});
+
+const Mint = bcs.struct("Mint", {
+    token_id: bcs.bytes(32),
+    amount: AmountBcs,
+});
+
+const ExternalClaim = bcs.struct("ExternalClaim", {
+    data: bcs.bytes(32) 
+});
+
+// Operations for Batch
+const TokenTransferOperation = bcs.struct("TokenTransferOperation", {
+    token_id: bcs.bytes(32),
+    recipient: bcs.bytes(32),
+    amount: AmountBcs,
+    user_data: bcs.option(bcs.bytes(32))
+});
+
+const MintOperation = bcs.struct("MintOperation", {
+    token_id: bcs.bytes(32),
+    recipient: bcs.bytes(32),
+    amount: AmountBcs
+});
+
+// Operation Enum
+const Operation = bcs.enum("Operation", {
+    TokenTransfer: TokenTransferOperation,
+    TokenCreation: TokenCreation, 
+    TokenManagement: TokenManagement,
+    Mint: MintOperation,
+    // Placeholders to maintain index alignment if other variants exist in Rust enum
+    StateInitialization: bcs.struct("StateInitialization", { dummy: bcs.u8() }),
+    StateUpdate: bcs.struct("StateUpdate", { dummy: bcs.u8() }),
+    ExternalClaim: bcs.struct("ExternalClaim", { dummy: bcs.u8() }),
+    StateReset: bcs.struct("StateReset", { dummy: bcs.u8() }),
+    JoinCommittee: bcs.struct("JoinCommittee", { dummy: bcs.u8() }),
+    LeaveCommittee: bcs.struct("LeaveCommittee", { dummy: bcs.u8() }),
+    ChangeCommittee: bcs.struct("ChangeCommittee", { dummy: bcs.u8() }),
+});
+
+const Batch = bcs.vector(Operation);
+
 // ============================
 // We now define the claim type
 // ============================
 
-// A "claim" is a concept on FastSet that drives state changes on the FastSet network. It is akin to
-// the "calldata" of a transaction on Ethereum. There are many types of claims, but in this example,
-// others are omitted since we are interested in the Transfer claim.
 const ClaimType = bcs.enum("ClaimType", {
     TokenTransfer: TokenTransfer,
+    TokenCreation: TokenCreation,
+    TokenManagement: TokenManagement,
+    Mint: Mint,
+    StateInitialization: bcs.struct("StateInitialization", { dummy: bcs.u8() }), // Placeholder
+    StateUpdate: bcs.struct("StateUpdate", { dummy: bcs.u8() }), // Placeholder
+    ExternalClaim: ExternalClaim,
+    StateReset: bcs.struct("StateReset", { dummy: bcs.u8() }), // Placeholder
+    JoinCommittee: bcs.struct("JoinCommittee", { dummy: bcs.u8() }), // Placeholder
+    LeaveCommittee: bcs.struct("LeaveCommittee", { dummy: bcs.u8() }), // Placeholder
+    ChangeCommittee: bcs.struct("ChangeCommittee", { dummy: bcs.u8() }), // Placeholder
+    Batch: Batch
 });
 
 // =======================================================
@@ -148,7 +227,7 @@ const ProxySubmitTransactionResult = bcs.enum("ProxySubmitTransactionResult", {
 async function proxy_getAccountInfo(url: string, address: Address): Promise<any> {
     const response = await request(url, "proxy_getAccountInfo", {
         address,
-        token_balance_filter: null,
+        token_balances_filter: [],
         certificate_by_nonce: null,
     });
     return response;
@@ -277,4 +356,13 @@ function makeSignature(signing_key: ed.Bytes, type: BcsType<any>, value: any): S
 
 function signTransaction(signing_key: ed.Bytes, value: Transaction): SignatureOrMultiSig {
     return makeSignature(signing_key, TransactionBcs, value);
+}
+
+function computeTokenId(tx: any) {
+    const head = new TextEncoder().encode("Transaction::");
+    const body = TransactionBcs.serialize(tx).toBytes();
+    const msg = new Uint8Array(head.length + body.length);
+    msg.set(head, 0);
+    msg.set(body, head.length);
+    return keccak_256(msg);
 }
