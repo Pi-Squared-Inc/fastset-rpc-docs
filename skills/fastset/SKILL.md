@@ -91,6 +91,18 @@ console.log("Balance:", info.result.balance); // hex string, e.g. "de0b6b3a76400
 console.log("Nonce:", info.result.next_nonce); // use as nonce for next tx
 ```
 
+**Response fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `balance` | hex string | Native token balance (e.g., `"de0b6b3a7640000"`) |
+| `next_nonce` | integer | Next valid nonce for transactions |
+| `token_balances` | object | Custom token balances (native balance is in `balance`) |
+| `sender` | array | Account address echo |
+| `pending_confirmation` | number | Pending transaction count |
+| `requested_state` | object/null | Account state if requested |
+| `requested_certificates` | array | Certificates if requested by nonce |
+
 > The `rpc()` helper is defined in [Complete Working Example](#complete-working-example) below.
 
 ---
@@ -364,6 +376,10 @@ curl -s -X POST https://proxy.fastset.xyz \
 | Insufficient balance | Not enough tokens | Use faucet or receive transfer first |
 | Invalid signature | Wrong signing process | Ensure `"Transaction::" + BCS(tx)` prefix |
 | `No more params` | Missing required RPC fields | Check all required params are present |
+| `sha512` / `hashes.sha512` not set | Missing ed25519 setup | Add `ed.hashes.sha512 = ...` (see Step 2) |
+| BigInt serialization error | `JSON.stringify` can't handle BigInt | Add `BigInt.prototype.toJSON` (see Step 2) |
+| Address serialized as object | `Uint8Array` not converted for JSON | Use `Array.from()` or `toJSON` helper |
+| Faucet returns `null` | **This is success**, not an error | Check `json.error` field for real errors |
 
 ---
 
