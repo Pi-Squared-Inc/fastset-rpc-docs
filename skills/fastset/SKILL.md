@@ -1,6 +1,9 @@
 ---
 name: fastset
-description: Interact with the FastSet network - a high-performance blockchain settlement layer. Use when submitting transactions, querying account balances, transferring tokens, minting custom tokens, or working with the FastSet JSON-RPC proxy API. Supports wallet operations with Ed25519 keys.
+version: 1.0.0
+description: Interact with the FastSet network — a high-performance settlement layer. Query accounts, submit transactions, transfer and mint tokens via the JSON-RPC proxy API. Supports Ed25519 wallet operations.
+author: Pi-Squared-Inc
+homepage: https://github.com/Pi-Squared-Inc/fastset-rpc-docs
 ---
 
 # FastSet Network Skill
