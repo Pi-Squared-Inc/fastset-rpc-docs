@@ -1,6 +1,6 @@
 ---
 name: fastset
-version: 1.1.0
+version: 1.2.0
 description: Interact with the FastSet network — a high-performance settlement layer. Query accounts, submit transactions, transfer and mint tokens via the JSON-RPC proxy API. Supports Ed25519 wallet operations.
 author: Pi-Squared-Inc
 homepage: https://github.com/Pi-Squared-Inc/fastset-rpc-docs
@@ -8,81 +8,131 @@ homepage: https://github.com/Pi-Squared-Inc/fastset-rpc-docs
 
 # FastSet Network Skill
 
-Interact with the FastSet network via the JSON-RPC proxy API at `https://proxy.fastset.xyz`.
+> **Interact with the FastSet network** via the JSON-RPC proxy API.
 
-## Prerequisites
+> 🚨 **Base URL:** `https://proxy.fastset.xyz`
 
-**npm packages** (for TypeScript/Node.js):
+---
+
+> ⚡ **New here?** Start at [Getting Started](#getting-started) — you'll have a funded wallet in 2 minutes.
+> 📋 **Already set up?** Jump to [Quick Reference](#quick-reference).
+> 🔧 **Need to sign transactions?** See [BCS Type Definitions](#bcs-type-definitions) and [Complete Working Example](#complete-working-example).
+
+---
+
+## Quick Reference
+
+| Action | Method | Endpoint |
+|--------|--------|----------|
+| Query account | `proxy_getAccountInfo` | Check balance, nonce, state |
+| Submit transaction | `proxy_submitTransaction` | Transfer tokens, create tokens, etc. |
+| Faucet (testnet) | `proxy_faucetDrip` | Get test tokens (returns `null` on success) |
+| Token info | `proxy_getTokenInfo` | Query custom token metadata |
+
+---
+
+## Getting Started
+
+### Step 1: Install Dependencies
+
 ```bash
 npm install @mysten/bcs @noble/ed25519 @noble/hashes
 ```
 
-**Required setup** — `@noble/ed25519` needs an explicit SHA-512 implementation:
+> ⚠️ **Version note:** This skill targets `@noble/ed25519` **v3.x**. If using v2.x, see [Version Compatibility](#version-compatibility).
+
+### Step 2: Required Setup
+
+Every script needs these before using ed25519:
+
 ```typescript
 import * as ed from "@noble/ed25519";
-import { sha512 } from "@noble/hashes/sha2";
-ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
-```
+import { sha512 } from "@noble/hashes/sha2.js";
 
-**BigInt JSON serialization** workaround (needed for JSON-RPC calls):
-```typescript
+// Required: ed25519 needs explicit SHA-512
+ed.hashes.sha512 = (...m) => sha512(ed.etc.concatBytes(...m));
+
+// Required: BigInt JSON serialization workaround
 // @ts-ignore
 BigInt.prototype.toJSON = function () { return Number(this); };
 ```
 
-**Uint8Array → JSON**: When serializing `Uint8Array` to JSON, use `Array.from(bytes)` — `JSON.stringify` doesn't handle typed arrays natively:
+> ⚠️ **Import path:** Use `@noble/hashes/sha2.js` (with `.js` extension) — ESM requires it.
+
+### Step 3: Generate a Wallet
+
 ```typescript
-JSON.stringify(data, (k, v) => v instanceof Uint8Array ? Array.from(v) : v);
+const privateKey = ed.utils.randomSecretKey(); // 32 bytes
+const publicKey = ed.getPublicKey(privateKey);  // 32 bytes = your address
+console.log("Address:", Buffer.from(publicKey).toString("hex"));
 ```
 
-## Quick Reference
+### Step 4: Fund via Faucet
 
-| Operation | Endpoint | Use Case |
-|-----------|----------|----------|
-| Get account info | `proxy_getAccountInfo` | Check balance, nonce, state |
-| Submit transaction | `proxy_submitTransaction` | Transfer tokens, create tokens, etc. |
-| Faucet (testnet) | `proxy_faucetDrip` | Get test tokens |
-| Get token info | `proxy_getTokenInfo` | Query custom token metadata |
+```typescript
+await rpc("proxy_faucetDrip", {
+  recipient: publicKey,        // Uint8Array → auto-serialized to byte array
+  amount: "de0b6b3a7640000",   // 1 SET (hex string)
+  token_id: null               // null = native token
+});
+// Returns null on success!
+```
+
+### Step 5: Check Your Balance
+
+```typescript
+const info = await rpc("proxy_getAccountInfo", {
+  address: publicKey,
+  token_balances_filter: null,
+  state_key_filter: null,
+  certificate_by_nonce: null,
+});
+console.log("Balance:", info.result.balance); // hex string, e.g. "de0b6b3a7640000"
+console.log("Nonce:", info.result.next_nonce); // use as nonce for next tx
+```
+
+> The `rpc()` helper is defined in [Complete Working Example](#complete-working-example) below.
+
+---
 
 ## Core Concepts
 
 - **Addresses**: 32-byte Ed25519 public keys — sent as JSON arrays of 32 unsigned integers (byte arrays), not hex strings
-- **Nonce**: Auto-incrementing `u64` per account (start at 0). Fetch current value from `proxy_getAccountInfo` → `next_nonce`
-- **Amounts**: Hex-encoded 256-bit integers in JSON (e.g., `"ffff"` = 65535). **BCS encodes these as 32-byte little-endian u256** — the `@mysten/bcs` transform handles this automatically (see BCS Types section)
-- **Timestamps**: `timestamp_nanos` is a `u128` (use `BigInt` in TypeScript)
-- **Native Token ID**: `FA575E7000000000000000000000000000000000000000000000000000000000` (as bytes: `[0xfa, 0x57, 0x5e, 0x70, 0, 0, ..., 0]`)
+- **Nonce**: Auto-incrementing `u64` per account (start at 0). Always fetch from `proxy_getAccountInfo` → `next_nonce` before submitting
+- **Amounts**: Hex-encoded 256-bit integers in JSON (e.g., `"ffff"` = 65535). BCS encodes these as 32-byte little-endian u256 automatically
+- **Timestamps**: `timestamp_nanos` is a `u128` (use `BigInt` in TypeScript: `BigInt(Date.now()) * 1_000_000n`)
+- **Native Token ID**: `[0xfa, 0x57, 0x5e, 0x70, 0, 0, ..., 0]` (32 bytes)
 - **Signatures**: Ed25519 over `"Transaction::" + BCS(transaction)`
+- **JSON serialization**: `Uint8Array` must be converted via `Array.from()` — see helper below
+
+---
 
 ## BCS Type Definitions
 
-These are required for transaction signing. The BCS schema must match the on-chain types exactly.
+Required for transaction signing. The BCS schema **must** match on-chain types exactly.
 
 ```typescript
 import { bcs } from "@mysten/bcs";
 
-const Bytes32 = bcs.bytes(32);
-const Bytes64 = bcs.bytes(64);
-
-// Amount: hex string in JSON, but BCS encodes as u256 (32-byte LE)
+// Amount: hex string in JSON, BCS encodes as u256 (32-byte LE)
 const AmountBcs = bcs.u256().transform({
   input: (val) => BigInt(`0x${val}`).toString(), // hex → decimal for BCS
 });
 
 const TokenTransfer = bcs.struct("TokenTransfer", {
-  token_id: Bytes32,
+  token_id: bcs.bytes(32),
   amount: AmountBcs,
-  user_data: bcs.option(Bytes32),
+  user_data: bcs.option(bcs.bytes(32)),
 });
 
-// ClaimType enum — variant order matters for BCS encoding!
-// Index 0 = TokenTransfer. Other variants exist but are omitted here.
+// Variant order matters for BCS! TokenTransfer = index 0.
 const ClaimType = bcs.enum("ClaimType", {
   TokenTransfer: TokenTransfer,
 });
 
 const TransactionBcs = bcs.struct("Transaction", {
-  sender: Bytes32,
-  recipient: Bytes32,
+  sender: bcs.bytes(32),
+  recipient: bcs.bytes(32),
   nonce: bcs.u64(),
   timestamp_nanos: bcs.u128(),
   claim: ClaimType,
@@ -91,68 +141,20 @@ const TransactionBcs = bcs.struct("Transaction", {
 ```
 
 > **Important**: The `ClaimType` enum variant ordering determines the BCS discriminant byte.
-> `TokenTransfer` = index 0. If you add more variants (TokenCreation, TokenManagement, Mint, ExternalClaim, Batch),
-> they must match the on-chain ordering. See `typescript-examples/fastset-types.ts` for the complete set.
+> If you add more variants, they must match on-chain ordering. See `typescript-examples/fastset-types.ts` for the complete set.
 
-## Common Operations
+---
 
-### 1. Query Account Balance
+## Transferring Tokens
 
-```bash
-curl -X POST https://proxy.fastset.xyz \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "proxy_getAccountInfo",
-    "params": {
-      "address": [134, 108, 191, 240, ...],
-      "token_balances_filter": null,
-      "state_key_filter": null,
-      "certificate_by_nonce": null
-    }
-  }'
-```
-
-> **Note**: `address` is a JSON array of 32 unsigned integers (the bytes of the Ed25519 public key).
-> `token_balances_filter` (not `token_balance_filter`) accepts an array of token IDs or `null`.
-
-**Response fields**:
-- `balance` — hex string (e.g., `"de0b6b3a7640000"`)
-- `next_nonce` — integer, use this as nonce for the next transaction
-- `token_balances` — map of custom token balances (native balance is in `balance`, not here)
-
-### 2. Get Test Tokens (Faucet)
-
-```bash
-curl -X POST https://proxy.fastset.xyz \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "proxy_faucetDrip",
-    "params": {
-      "recipient": [134, 108, 191, 240, ...],
-      "amount": "de0b6b3a7640000",
-      "token_id": null
-    }
-  }'
-```
-
-> `recipient` is a byte array (same format as address). `amount` is a hex string.
-> `token_id` can be `null` (native token) or a 32-byte array for custom tokens.
-> **Returns `null` on success** (not a confirmation object).
-
-### 3. Transfer Tokens
-
-Build a transaction object:
+### Build the Transaction
 
 ```typescript
 const transaction = {
   sender: senderPubKey,          // Uint8Array (32 bytes)
   recipient: recipientPubKey,    // Uint8Array (32 bytes)
   nonce: nextNonce,              // number (from getAccountInfo)
-  timestamp_nanos: BigInt(Date.now()) * 1_000_000n,  // u128 nanoseconds
+  timestamp_nanos: BigInt(Date.now()) * 1_000_000n,
   claim: {
     TokenTransfer: {
       token_id: SET_TOKEN_ID,    // Uint8Array (32 bytes)
@@ -164,25 +166,27 @@ const transaction = {
 };
 ```
 
-Sign and submit:
+### Sign It
 
 ```typescript
-// Sign
 const msghead = new TextEncoder().encode("Transaction::");
 const msgbody = TransactionBcs.serialize(transaction).toBytes();
 const msg = new Uint8Array(msghead.length + msgbody.length);
 msg.set(msghead, 0);
 msg.set(msgbody, msghead.length);
 const signature = ed.sign(msg, privateKey);
-
-// Submit via JSON-RPC
-const params = {
-  transaction,
-  signature: { Signature: signature }  // wraps in enum variant
-};
-// POST to proxy with method "proxy_submitTransaction" and params above
-// Remember to use the custom JSON serializer for Uint8Array → Array.from()
 ```
+
+### Submit It
+
+```typescript
+const result = await rpc("proxy_submitTransaction", {
+  transaction,
+  signature: { Signature: signature },  // wrapped in enum variant
+});
+```
+
+---
 
 ## Claim Types
 
@@ -195,37 +199,19 @@ const params = {
 | `ExternalClaim` | 4 | Submit arbitrary data with verifier signatures |
 | `Batch` | 5 | Bundle multiple operations |
 
-## Wallet Management
-
-### Generate New Keypair
-
-```typescript
-import * as ed from "@noble/ed25519";
-import { sha512 } from "@noble/hashes/sha2";
-ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
-
-const privateKey = ed.utils.randomPrivateKey(); // 32 bytes
-const publicKey = ed.getPublicKey(privateKey);   // 32 bytes = your address
-```
-
-### Store Private Key Securely
-
-Store as hex string in environment variable or secure vault:
-```bash
-export FASTSET_PRIVATE_KEY="your_64_char_hex_private_key"
-```
+---
 
 ## Complete Working Example
 
-Self-contained Node.js example — generate wallet, fund via faucet, transfer tokens:
+Self-contained Node.js script — generates two wallets, funds one, transfers tokens to the other.
 
 ```typescript
 import * as ed from "@noble/ed25519";
-import { sha512 } from "@noble/hashes/sha2";
+import { sha512 } from "@noble/hashes/sha2.js";
 import { bcs } from "@mysten/bcs";
 
-// Setup
-ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
+// ── Setup ──────────────────────────────────────────────
+ed.hashes.sha512 = (...m) => sha512(ed.etc.concatBytes(...m));
 // @ts-ignore
 BigInt.prototype.toJSON = function () { return Number(this); };
 
@@ -233,7 +219,7 @@ const PROXY = "https://proxy.fastset.xyz";
 const SET_TOKEN_ID = new Uint8Array(32);
 SET_TOKEN_ID.set([0xfa, 0x57, 0x5e, 0x70], 0);
 
-// BCS types (minimal for TokenTransfer)
+// ── BCS Types ──────────────────────────────────────────
 const AmountBcs = bcs.u256().transform({
   input: (val) => BigInt(`0x${val}`).toString(),
 });
@@ -247,56 +233,128 @@ const TransactionBcs = bcs.struct("Transaction", {
   claim: ClaimType, archival: bcs.bool(),
 });
 
-// Helpers
-const toJSON = (data: any) => JSON.stringify(data, (k, v) =>
+// ── JSON Helper (Uint8Array → Array) ───────────────────
+const toJSON = (data) => JSON.stringify(data, (k, v) =>
   v instanceof Uint8Array ? Array.from(v) : v);
 
-async function rpc(method: string, params: any) {
+// ── RPC Helper ─────────────────────────────────────────
+async function rpc(method, params) {
   const res = await fetch(PROXY, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: toJSON({ jsonrpc: "2.0", id: 1, method, params }),
   });
-  return res.json();
+  const json = await res.json();
+  if (json.error) throw new Error(`RPC error: ${JSON.stringify(json.error)}`);
+  return json;
 }
 
-// 1. Generate keypairs
-const sk1 = ed.utils.randomPrivateKey();
+// ── 1. Generate two wallets ────────────────────────────
+const sk1 = ed.utils.randomSecretKey();
 const pk1 = ed.getPublicKey(sk1);
-const sk2 = ed.utils.randomPrivateKey();
+const sk2 = ed.utils.randomSecretKey();
 const pk2 = ed.getPublicKey(sk2);
+console.log("Wallet 1:", Buffer.from(pk1).toString("hex"));
+console.log("Wallet 2:", Buffer.from(pk2).toString("hex"));
 
-// 2. Fund sender via faucet
+// ── 2. Fund wallet 1 via faucet ────────────────────────
 await rpc("proxy_faucetDrip", { recipient: pk1, amount: "de0b6b3a7640000", token_id: null });
+console.log("Faucet: funded wallet 1");
 
-// 3. Check balance & nonce
+// ── 3. Check balance & nonce ───────────────────────────
 const info = await rpc("proxy_getAccountInfo", {
   address: pk1, token_balances_filter: null, state_key_filter: null, certificate_by_nonce: null,
 });
-console.log("Balance:", info.result.balance, "Nonce:", info.result.next_nonce);
+console.log("Balance:", info.result.balance, "| Nonce:", info.result.next_nonce);
 
-// 4. Build, sign, and submit a transfer
+// ── 4. Build transfer transaction ──────────────────────
 const tx = {
   sender: pk1, recipient: pk2, nonce: info.result.next_nonce,
   timestamp_nanos: BigInt(Date.now()) * 1_000_000n,
   claim: { TokenTransfer: { token_id: SET_TOKEN_ID, amount: "ffff", user_data: null } },
   archival: false,
 };
+
+// ── 5. Sign ────────────────────────────────────────────
 const head = new TextEncoder().encode("Transaction::");
 const body = TransactionBcs.serialize(tx).toBytes();
 const msg = new Uint8Array(head.length + body.length);
 msg.set(head, 0); msg.set(body, head.length);
 const sig = ed.sign(msg, sk1);
 
+// ── 6. Submit ──────────────────────────────────────────
 const result = await rpc("proxy_submitTransaction", {
   transaction: tx, signature: { Signature: sig },
 });
-console.log("Transfer result:", result);
+console.log("Transfer submitted:", result.result ? "✅ success" : "❌ failed");
+
+// ── 7. Verify balances ────────────────────────────────
+const info1 = await rpc("proxy_getAccountInfo", {
+  address: pk1, token_balances_filter: null, state_key_filter: null, certificate_by_nonce: null,
+});
+const info2 = await rpc("proxy_getAccountInfo", {
+  address: pk2, token_balances_filter: null, state_key_filter: null, certificate_by_nonce: null,
+});
+console.log("Wallet 1 balance:", info1.result.balance);
+console.log("Wallet 2 balance:", info2.result.balance);
 ```
 
-## Transaction Signing (Rust)
+---
 
-Use the `bcs` crate with `serde` for serialization. See `rust-examples/` for complete implementation.
+## Version Compatibility
+
+### `@noble/ed25519` v2.x vs v3.x
+
+| Feature | v2.x | v3.x (current) |
+|---------|------|-----------------|
+| Import SHA-512 | `@noble/hashes/sha2` | `@noble/hashes/sha2.js` |
+| Set SHA-512 | `ed.etc.sha512Sync = ...` | `ed.hashes.sha512 = ...` |
+| Generate key | `ed.utils.randomPrivateKey()` | `ed.utils.randomSecretKey()` |
+| Get public key | `ed.getPublicKey(sk)` | `ed.getPublicKey(sk)` (same) |
+| Sign | `ed.sign(msg, sk)` | `ed.sign(msg, sk)` (same) |
+
+To pin v2: `npm install @noble/ed25519@2 @noble/hashes@1`
+
+---
+
+## curl Examples
+
+### Query Account
+
+```bash
+curl -s -X POST https://proxy.fastset.xyz \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0", "id": 1,
+    "method": "proxy_getAccountInfo",
+    "params": {
+      "address": [134, 108, 191, 240, 166, 239, 50, ...],
+      "token_balances_filter": null,
+      "state_key_filter": null,
+      "certificate_by_nonce": null
+    }
+  }'
+```
+
+### Faucet Drip
+
+```bash
+curl -s -X POST https://proxy.fastset.xyz \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0", "id": 1,
+    "method": "proxy_faucetDrip",
+    "params": {
+      "recipient": [134, 108, 191, 240, 166, 239, 50, ...],
+      "amount": "de0b6b3a7640000",
+      "token_id": null
+    }
+  }'
+```
+
+> Both `address` and `recipient` are JSON arrays of 32 unsigned integers (byte values of the Ed25519 public key).
+
+---
 
 ## Error Handling
 
@@ -304,9 +362,15 @@ Use the `bcs` crate with `serde` for serialization. See `rust-examples/` for com
 |-------|-------|-----|
 | Invalid nonce | Wrong sequence number | Fetch `next_nonce` from `proxy_getAccountInfo` |
 | Insufficient balance | Not enough tokens | Use faucet or receive transfer first |
-| Invalid signature | Wrong signing process | Ensure BCS encoding with `"Transaction::"` prefix |
-| `No more params` | Missing required RPC parameters | Check all required fields are present |
+| Invalid signature | Wrong signing process | Ensure `"Transaction::" + BCS(tx)` prefix |
+| `No more params` | Missing required RPC fields | Check all required params are present |
+
+---
+
+## Rust
+
+Use the `bcs` crate with `serde` for serialization. See `rust-examples/` for a complete implementation.
 
 ## API Reference
 
-See `docs/proxy/rpc.md` for complete JSON-RPC specification including all data types and schemas.
+Full JSON-RPC specification: `docs/proxy/rpc.md`
