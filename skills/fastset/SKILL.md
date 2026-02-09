@@ -21,11 +21,11 @@ Interact with the FastSet network via the JSON-RPC proxy API at `https://proxy.f
 
 ## Core Concepts
 
-- **Addresses**: 32-byte Ed25519 public keys (hex-encoded as 64 chars)
+- **Addresses**: 32-byte Ed25519 public keys — sent as JSON arrays of 32 unsigned integers (byte arrays), not hex strings
 - **Nonce**: Auto-incrementing u64 per account (start at 0)
 - **Amounts**: Hex-encoded 256-bit integers (e.g., `"ffff"` = 65535)
 - **Native Token ID**: `FA575E7000000000000000000000000000000000000000000000000000000000`
-- **Signatures**: Ed25519 over BCS-serialized transaction with `"Transaction::"` prefix
+- **Signatures**: Ed25519 over `"Transaction::" + BCS(transaction)` (BCS encodes Amount/Balance fields as 32-byte little-endian u256)
 
 ## Common Operations
 
@@ -39,14 +39,18 @@ curl -X POST https://proxy.fastset.xyz \
     "id": 1,
     "method": "proxy_getAccountInfo",
     "params": {
-      "address": [/* 32-byte array */],
-      "token_balance_filter": null,
+      "address": [134, 108, 191, 240, ...],
+      "token_balances_filter": null,
+      "state_key_filter": null,
       "certificate_by_nonce": null
     }
   }'
 ```
 
-Response includes `balance` (hex string), `next_nonce`, and `token_balance` array.
+> **Note**: `address` is a JSON array of 32 unsigned integers (the bytes of the Ed25519 public key).  
+> `token_balances_filter` (not `token_balance_filter`) accepts an array of token IDs or `null`.
+
+Response includes `balance` (hex string), `next_nonce`, and `token_balances` map.
 
 ### 2. Get Test Tokens (Faucet)
 
@@ -58,12 +62,16 @@ curl -X POST https://proxy.fastset.xyz \
     "id": 1,
     "method": "proxy_faucetDrip",
     "params": {
-      "recipient": [/* 32-byte array */],
+      "recipient": [134, 108, 191, 240, ...],
       "amount": "de0b6b3a7640000",
       "token_id": null
     }
   }'
 ```
+
+> **Note**: `recipient` is a byte array (same format as address). `amount` is a hex string.  
+> `token_id` can be `null` (native token) or a 32-byte array for custom tokens.  
+> Returns `null` on success.
 
 ### 3. Transfer Tokens
 
@@ -126,8 +134,8 @@ Use the `bcs` crate with `serde` for serialization. See `rust-examples/` for com
 
 ```typescript
 import * as ed from "@noble/ed25519";
-const privateKey = ed.utils.randomPrivateKey(); // 32 bytes
-const publicKey = ed.getPublicKey(privateKey);  // 32 bytes = address
+const privateKey = ed.utils.randomPrivateKey(); // 32 bytes (or randomSecretKey() in newer versions)
+const publicKey = await ed.getPublicKeyAsync(privateKey); // 32 bytes = address
 ```
 
 ### Store Private Key Securely
