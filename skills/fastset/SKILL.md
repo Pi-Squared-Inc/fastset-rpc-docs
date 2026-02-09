@@ -142,9 +142,60 @@ const TokenTransfer = bcs.struct("TokenTransfer", {
   user_data: bcs.option(bcs.bytes(32)),
 });
 
+const TokenCreation = bcs.struct("TokenCreation", {
+  token_name: bcs.string(),
+  decimals: bcs.u8(),
+  initial_amount: AmountBcs,
+  mints: bcs.vector(bcs.bytes(32)),
+  user_data: bcs.option(bcs.bytes(32)),
+});
+
+const AddressChange = bcs.enum("AddressChange", {
+  Add: bcs.tuple([]),
+  Remove: bcs.tuple([]),
+});
+
+const TokenManagement = bcs.struct("TokenManagement", {
+  token_id: bcs.bytes(32),
+  update_id: bcs.u64(), 
+  new_admin: bcs.option(bcs.bytes(32)),
+  mints: bcs.vector(bcs.tuple([AddressChange, bcs.bytes(32)])),
+  user_data: bcs.option(bcs.bytes(32)),
+});
+
+const Mint = bcs.struct("Mint", {
+  token_id: bcs.bytes(32),
+  amount: AmountBcs,
+});
+
 // Variant order matters for BCS! TokenTransfer = index 0.
 const ClaimType = bcs.enum("ClaimType", {
   TokenTransfer: TokenTransfer,
+  TokenCreation: TokenCreation,
+  TokenManagement: TokenManagement,
+  Mint: Mint,
+  StateInitialization: bcs.struct("StateInitialization", { dummy: bcs.u8() }),
+  StateUpdate: bcs.struct("StateUpdate", { dummy: bcs.u8() }),
+  ExternalClaim: bcs.struct("ExternalClaim", { data: bcs.bytes(32) }),
+  StateReset: bcs.struct("StateReset", { dummy: bcs.u8() }),
+  JoinCommittee: bcs.struct("JoinCommittee", { dummy: bcs.u8() }),
+  LeaveCommittee: bcs.struct("LeaveCommittee", { dummy: bcs.u8() }),
+  ChangeCommittee: bcs.struct("ChangeCommittee", { dummy: bcs.u8() }),
+  Batch: bcs.vector(bcs.enum("Operation", {
+      TokenTransfer: bcs.struct("TokenTransferOperation", {
+          token_id: bcs.bytes(32),
+          recipient: bcs.bytes(32),
+          amount: AmountBcs,
+          user_data: bcs.option(bcs.bytes(32))
+      }),
+      TokenCreation: TokenCreation,
+      TokenManagement: TokenManagement,
+      Mint: bcs.struct("MintOperation", {
+          token_id: bcs.bytes(32),
+          recipient: bcs.bytes(32),
+          amount: AmountBcs
+      })
+  }))
 });
 
 const TransactionBcs = bcs.struct("Transaction", {
