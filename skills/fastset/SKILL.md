@@ -1,6 +1,6 @@
 ---
 name: fastset
-version: 1.2.0
+version: 1.3.0
 description: Interact with the FastSet network — a high-performance settlement layer. Query accounts, submit transactions, transfer and mint tokens via the JSON-RPC proxy API. Supports Ed25519 wallet operations.
 author: Pi-Squared-Inc
 homepage: https://github.com/Pi-Squared-Inc/fastset-rpc-docs
@@ -36,9 +36,12 @@ homepage: https://github.com/Pi-Squared-Inc/fastset-rpc-docs
 ### Step 1: Install Dependencies
 
 ```bash
+npm init -y  # if starting fresh
+npm pkg set type=module  # required for ESM imports
 npm install @mysten/bcs @noble/ed25519 @noble/hashes
 ```
 
+> ⚠️ **ESM required:** Your `package.json` must have `"type": "module"` (or use `.mjs` file extension).
 > ⚠️ **Version note:** This skill targets `@noble/ed25519` **v3.x**. If using v2.x, see [Version Compatibility](#version-compatibility).
 
 ### Step 2: Required Setup
@@ -97,11 +100,12 @@ console.log("Nonce:", info.result.next_nonce); // use as nonce for next tx
 |-------|------|-------------|
 | `balance` | hex string | Native token balance (e.g., `"de0b6b3a7640000"`) |
 | `next_nonce` | integer | Next valid nonce for transactions |
-| `token_balances` | object | Custom token balances (native balance is in `balance`) |
+| `token_balance` | array | Custom token balances (native balance is in `balance`) |
 | `sender` | array | Account address echo |
-| `pending_confirmation` | number | Pending transaction count |
-| `requested_state` | object/null | Account state if requested |
+| `pending_confirmation` | number/null | Pending transaction count (`null` for new accounts) |
+| `requested_state` | array | Account state if requested (empty array `[]` by default) |
 | `requested_certificates` | array | Certificates if requested by nonce |
+| `requested_validated_transaction` | object/null | Validated transaction if requested |
 
 > The `rpc()` helper is defined in [Complete Working Example](#complete-working-example) below.
 
@@ -115,6 +119,7 @@ console.log("Nonce:", info.result.next_nonce); // use as nonce for next tx
 - **Timestamps**: `timestamp_nanos` is a `u128` (use `BigInt` in TypeScript: `BigInt(Date.now()) * 1_000_000n`)
 - **Native Token ID**: `[0xfa, 0x57, 0x5e, 0x70, 0, 0, ..., 0]` (32 bytes)
 - **Signatures**: Ed25519 over `"Transaction::" + BCS(transaction)`
+- **Transaction fees**: Transfers incur a fee (~0.01 SET). The sender's balance decreases by the transfer amount **plus** the fee
 - **JSON serialization**: `Uint8Array` must be converted via `Array.from()` — see helper below
 
 ---
@@ -196,7 +201,11 @@ const result = await rpc("proxy_submitTransaction", {
   transaction,
   signature: { Signature: signature },  // wrapped in enum variant
 });
+// On success: result.result = { Success: { envelope: {...}, signatures: [...] } }
+// The envelope contains your transaction + signature; signatures are validator confirmations
 ```
+
+> **Note:** Transactions incur a fee (~0.01 SET). The sender's balance will decrease by the transfer amount **plus** the fee.
 
 ---
 
