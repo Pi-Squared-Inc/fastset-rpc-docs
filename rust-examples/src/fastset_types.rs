@@ -4,13 +4,13 @@ use std::{
 };
 
 use bech32::{Bech32m, Hrp};
-use bnum::{BInt, BUint, cast::As as _, types::U256};
+use bnum::{cast::As as _, types::U256, BInt, BUint};
 use ed25519_dalek::{self as dalek, Signer};
 use rand::rngs::OsRng;
-use serde::{Deserialize, Serialize, de::Error as DesError};
+use serde::{de::Error as DesError, Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PublicKeyBytes(pub [u8; dalek::PUBLIC_KEY_LENGTH]);
 
 /// Convert address to string in default format (bech32m)
@@ -36,7 +36,13 @@ pub type ValidatorName = PublicKeyBytes;
 
 pub struct KeyPair(dalek::SigningKey);
 
-#[derive(Debug, Serialize, Deserialize)]
+impl KeyPair {
+    pub fn public_key(&self) -> PublicKeyBytes {
+        PublicKeyBytes(self.0.verifying_key().to_bytes())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub struct Nonce(u64);
 
 impl Display for Nonce {
@@ -45,10 +51,16 @@ impl Display for Nonce {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub struct Quorum(u64);
 
-#[derive(Debug, Serialize, Deserialize)]
+impl From<u64> for Quorum {
+    fn from(value: u64) -> Self {
+        Quorum(value)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 #[serde(transparent)]
 pub struct TokenId(pub [u8; 32]);
 
@@ -232,19 +244,32 @@ impl TryFrom<I320> for Balance {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UserData(pub Option<[u8; 32]>);
-
-#[derive(Serialize, Deserialize)]
-pub struct StateKey(pub [u8; 32]);
-
-#[derive(Serialize, Deserialize)]
+#[derive(
+    Eq, PartialEq, Ord, PartialOrd, Clone, Copy, Hash, Default, Debug, Serialize, Deserialize,
+)]
 pub struct State(pub [u8; 32]);
 
-#[derive(Serialize, Deserialize)]
+#[derive(
+    Eq, PartialEq, Ord, PartialOrd, Clone, Copy, Hash, Default, Debug, Serialize, Deserialize,
+)]
+pub struct StateKey(pub [u8; 32]);
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone)]
+pub struct UserData(pub Option<[u8; 32]>);
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone, Debug)]
 pub struct NonceRange {
     pub start: Nonce,
     pub limit: usize,
+}
+
+#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Hash, Default, Debug, Serialize, Deserialize)]
+pub struct ClaimData(pub Vec<u8>);
+
+impl From<String> for ClaimData {
+    fn from(value: String) -> Self {
+        ClaimData(value.as_bytes().to_vec())
+    }
 }
 
 /// Something that we know how to hash and sign.
@@ -270,7 +295,7 @@ where
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub struct Signature(#[serde(with = "serde_arrays")] pub ed25519::SignatureBytes);
 
 impl Signature {
@@ -325,7 +350,7 @@ pub struct CrossSignResponse {
 // We now define the set of basic claims and operations
 // ====================================================
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TokenTransfer {
     /// Token ID to transfer
     pub token_id: TokenId,
@@ -335,6 +360,85 @@ pub struct TokenTransfer {
     pub user_data: UserData,
 }
 
+/// Create a new token.
+/// The token id is derived from the [Transaction]
+/// so it depends also on the creator and the [Nonce].
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+pub struct TokenCreation {
+    /// Human-readable name
+    pub token_name: String,
+    /// Power of 10 that should be considered a full unit of this token.
+    /// An [Amount] is still always in least units.
+    pub decimals: u8,
+    /// Initial balance, which will be held by the creator of the token.
+    pub initial_amount: Amount,
+    /// Addresses which will be able to create more of this token
+    pub mints: Vec<FastSetAddress>,
+    /// Arbitrary userdata attached to this transaction
+    pub user_data: UserData,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+pub enum AddressChange {
+    Add(),
+    Remove(),
+}
+
+/// Manage an existing token.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+pub struct TokenManagement {
+    /// The id of the token to be managed
+    pub token_id: TokenId,
+    /// The update id for this token (used for sequencing)
+    /// Each update id must be one greater than the last
+    pub update_id: Nonce,
+    /// The new admin address; preserve existing admin if None
+    pub new_admin: Option<FastSetAddress>,
+    /// The minter addresses to be added/removed
+    pub mints: Vec<(AddressChange, FastSetAddress)>,
+    /// Arbitrary userdata attached to this transaction
+    pub user_data: UserData,
+}
+
+/// Create more funds of a token.
+/// The sender of the [Transaction] must be a current mint of the token.
+/// Warning: This is not independent of a token management operation that
+/// removes the sender of this transaction from the list of mints.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+pub struct Mint {
+    /// Token ID. This is the hash of the TokenCreation transaction that created the token.
+    /// This is calculated using the keccak256 hash over the data encoded in the same way as
+    /// for signing.
+    pub token_id: TokenId,
+    /// Amount to mint
+    pub amount: Amount,
+}
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+pub struct ExternalClaimBody {
+    /// Set of verifiers (regular  FastSet addresses) that can sign for this ExternalClaim
+    pub verifier_committee: Vec<FastSetAddress>,
+    /// Minimum number of verifiers in `verifier_committee` for which fastset validators will sign
+    /// this transaction
+    pub verifier_quorum: Quorum,
+    /// Arbitrary data that the verifiers are signing.
+    pub claim_data: ClaimData,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct VerifierSig {
+    pub verifier_addr: PublicKeyBytes,
+    pub sig: Signature,
+}
+
+/// Submit arbitrary data along with a quorum of signatures from external verifiers
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+pub struct ExternalClaim {
+    /// The claim itself plus the required verifier quorum
+    pub claim: ExternalClaimBody,
+    /// At least `claim.verifier_quorum` signatures over the enclosing `Transaction` (with this field set to the empty list) by members of `claim.verifier_committee`
+    pub signatures: Vec<VerifierSig>,
+}
+
 // ============================
 // We now define the claim type
 // ============================
@@ -342,17 +446,28 @@ pub struct TokenTransfer {
 // A "claim" is a concept on FastSet that drives state changes on the FastSet network. It is akin to
 // the "calldata" of a transaction on Ethereum. There are many types of claims, but in this example,
 // others are omitted since we are interested in the Transfer claim.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum ClaimType {
     /// Transfer or burn tokens (that is, transfer tokens to the burn address)
     TokenTransfer(TokenTransfer),
+    /// Create custom token
+    TokenCreation(TokenCreation),
+    /// Modify custom token
+    TokenManagement(TokenManagement),
+    /// Mint funds in a custom token
+    Mint(Mint),
+    /// Placeholders for internal claim types
+    Placeholder1(),
+    Placeholder2(),
+    /// Submit arbitrary data to be settled on the network
+    ExternalClaim(ExternalClaim),
 }
 
 // =======================================================
 // We now define transactions, envelopes, and certificates
 // =======================================================
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Transaction {
     /// Address of sender, and intended signer of this transaction
     pub sender: FastSetAddress,
@@ -372,6 +487,21 @@ pub struct Transaction {
 
 impl BcsSignable for Transaction {}
 
+impl Transaction {
+    pub fn without_verifier_sig(&self) -> Self {
+        match &self.claim {
+            ClaimType::ExternalClaim(claim) => {
+                let mut tx_without_verifier_sigs = self.clone();
+                let mut claim_without_verifier_sig = claim.clone();
+                claim_without_verifier_sig.signatures = vec![];
+                tx_without_verifier_sigs.claim =
+                    ClaimType::ExternalClaim(claim_without_verifier_sig);
+                tx_without_verifier_sigs
+            }
+            _ => self.clone(),
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TransactionEnvelope {
@@ -386,6 +516,20 @@ impl TransactionEnvelope {
             transaction,
             signature: SignatureOrMultiSig::Signature(signature),
         }
+    }
+
+    pub fn add_verifier_sig(&mut self, private_key: &KeyPair) {
+        let signature = Signature::new(&self.transaction.without_verifier_sig(), private_key);
+        if let ClaimType::ExternalClaim(claim) = &mut self.transaction.claim {
+            let public_key = private_key.public_key();
+
+            let verifier_sig = VerifierSig {
+                sig: signature,
+                verifier_addr: public_key,
+            };
+
+            claim.signatures.push(verifier_sig);
+        };
     }
 }
 
