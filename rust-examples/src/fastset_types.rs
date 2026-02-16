@@ -7,6 +7,7 @@ use bech32::{Bech32m, Hrp};
 use bnum::{cast::As as _, types::U256, BInt, BUint};
 use ed25519_dalek::{self as dalek, Signer};
 use rand::rngs::OsRng;
+use sha3::{Digest, Keccak256};
 use serde::{de::Error as DesError, Deserialize, Serialize};
 use thiserror::Error;
 
@@ -492,6 +493,15 @@ pub struct Transaction {
 impl BcsSignable for Transaction {}
 
 impl Transaction {
+    pub fn tx_id(&self) -> [u8; 32] {
+        let mut hasher = Keccak256::new();
+        let mut buf = vec![];
+        bcs::serialize_into(&mut buf, &self).expect("bcs serialization should not fail");
+        hasher.update(buf);
+        let hash = hasher.finalize();
+        hash.into()
+    }
+
     pub fn without_verifier_sig(&self) -> Self {
         match &self.claim {
             ClaimType::ExternalClaim(claim) => {
