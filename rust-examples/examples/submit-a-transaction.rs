@@ -3,13 +3,12 @@ async fn main() -> anyhow::Result<()> {
   // begin-snippet: submit-a-transaction-nonce
   use std::time::{SystemTime, UNIX_EPOCH};
   use jsonrpsee::http_client::HttpClient;
-  use fast_rust_examples::fastset_types::*;
-  use fast_rust_examples::client::ProxyRpcClient;
+  use fast_rust_examples::{fastset_types::*, client::ProxyRpcClient};
+
   let (sender_pub_key, sender_priv_key) = get_key_pair();
   let client = HttpClient::builder().build("https://proxy.fastset.xyz")?;
   let next_nonce = client.get_account_info(sender_pub_key, None, None, None).await?.next_nonce;
   // end-snippet
-
 
   // begin-snippet: submit-a-transaction-build
   let (recipient_pub_key, _recipient_priv_key) = get_key_pair();
