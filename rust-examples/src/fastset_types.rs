@@ -50,6 +50,12 @@ impl KeyPair {
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
 pub struct Nonce(u64);
 
+impl From<u64> for Nonce {
+    fn from(value: u64) -> Self {
+        Self(value)
+    }
+}
+
 impl Display for Nonce {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(format!("{}", self.0).as_str())
@@ -61,7 +67,7 @@ pub struct Quorum(u64);
 
 impl From<u64> for Quorum {
     fn from(value: u64) -> Self {
-        Quorum(value)
+        Self(value)
     }
 }
 
@@ -324,6 +330,17 @@ pub struct MultiSigConfig {
     /// Arbitrary data. Useful for creating multiple distinct multisig accounts with the same
     /// committee/quorum.
     pub nonce: Nonce,
+}
+
+impl MultiSigConfig {
+    pub fn address(&self) -> [u8; 32] {
+        let mut hasher = Keccak256::new();
+        let mut buf = vec![];
+        bcs::serialize_into(&mut buf, &self).expect("bcs serialization should not fail");
+        hasher.update(buf);
+        let hash = hasher.finalize();
+        hash.into()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

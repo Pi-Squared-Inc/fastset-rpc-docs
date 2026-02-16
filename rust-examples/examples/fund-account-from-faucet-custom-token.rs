@@ -2,8 +2,7 @@
 async fn main() -> anyhow::Result<()> {
   // begin-snippet: fund-account-from-faucet-custom-token
   use jsonrpsee::http_client::HttpClient;
-  use fast_rust_examples::fastset_types::*;
-  use fast_rust_examples::client::ProxyRpcClient;
+  use fast_rust_examples::{fastset_types::*, client::ProxyRpcClient};
 
   let (sender_pub_key, _sender_priv_key) = get_key_pair();
 
