@@ -1,9 +1,11 @@
 [package]
-name = "rust-examples"
+name = "fast-rust-examples"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.98"
+base64 = "0.12.3"
 bcs = "0.1.6"
 bech32 = "0.11.1"
 bnum = "0.13.0"
@@ -17,3 +19,6 @@ serde-name = "0.2.1"
 serde_arrays = "0.2.0"
 thiserror = "2.0.18"
 tokio = { version = "1.49.0", features = ["full", "macros"] }
+
+# enable builds in a nested workspace if needed
+[workspace]

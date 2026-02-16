@@ -40,6 +40,10 @@ impl KeyPair {
     pub fn public_key(&self) -> PublicKeyBytes {
         PublicKeyBytes(self.0.verifying_key().to_bytes())
     }
+
+    pub unsafe fn display(&self) -> String {
+        base64::encode(self.0.to_bytes())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash, Clone)]
