@@ -14,7 +14,7 @@ async fn main() -> anyhow::Result<()> {
 
   let client = HttpClient::builder().build("https://proxy.fastset.xyz").unwrap();
   client.faucet_drip(multisig_address, 10.into(), None).await?;
-  // end-snippet
+  // end-snippet: fund-account-from-faucet-multisig
 
   Ok(())
 }

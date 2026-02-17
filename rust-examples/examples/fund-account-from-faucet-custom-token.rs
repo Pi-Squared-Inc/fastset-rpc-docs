@@ -9,7 +9,7 @@ async fn main() -> anyhow::Result<()> {
   let client = HttpClient::builder().build("https://proxy.fastset.xyz")?;
   let my_token_id = TokenId::native(); // can replace this with your custom token ID
   client.faucet_drip(sender_pub_key, 10.into(), Some(my_token_id.clone())).await?;
-  // end-snippet
+  // end-snippet: fund-account-from-faucet-custom-token
 
   let (req_token_id, balance) = &client.get_account_info(sender_pub_key, Some(vec![my_token_id.clone()]), None, None).await?.token_balance[0];
   assert!(*req_token_id == my_token_id);

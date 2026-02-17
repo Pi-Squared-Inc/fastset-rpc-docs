@@ -8,6 +8,6 @@ async fn main() -> anyhow::Result<()> {
   let client = HttpClient::builder().build("https://proxy.fastset.xyz")?;
   let next_nonce = client.get_account_info(sender_pub_key, None, None, None).await?.next_nonce;
   println!("Next nonce for account {sender_pub_key} is {next_nonce}");
-  // end-snippet
+  // end-snippet: fetch-next-nonce
   Ok(())
 }

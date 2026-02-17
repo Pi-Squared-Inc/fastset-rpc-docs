@@ -1,5 +1,6 @@
 #[tokio::main()]
 async fn main() -> anyhow::Result<()> {
+  // begin-snippet: submit-a-transaction
   // begin-snippet: submit-a-transaction-nonce
   use std::time::{SystemTime, UNIX_EPOCH};
   use jsonrpsee::http_client::HttpClient;
@@ -8,7 +9,7 @@ async fn main() -> anyhow::Result<()> {
   let (sender_pub_key, sender_priv_key) = get_key_pair();
   let client = HttpClient::builder().build("https://proxy.fastset.xyz")?;
   let next_nonce = client.get_account_info(sender_pub_key, None, None, None).await?.next_nonce;
-  // end-snippet
+  // end-snippet: submit-a-transaction-nonce
 
   // begin-snippet: submit-a-transaction-build
   let (recipient_pub_key, _recipient_priv_key) = get_key_pair();
@@ -33,15 +34,16 @@ async fn main() -> anyhow::Result<()> {
           .as_nanos(),
       archival: false,
   };
-  // end-snippet
+  // end-snippet: submit-a-transaction-build
 
   // begin-snippet: submit-a-transaction-sign
   let signature = SignatureOrMultiSig::Signature(Signature::new(&tx, &sender_priv_key));
-  // end-snippet
+  // end-snippet: submit-a-transaction-sign
 
   // begin-snippet: submit-a-transaction-submit
   let res = client.submit_transaction(tx.clone(), signature).await?;
-  // end-snippet
+  // end-snippet: submit-a-transaction-submit
+  // end-snippet: submit-a-transaction
 
   println!("Sender {sender_pub_key} submitted tx with id {:?} and got result {:?}", tx.tx_id(), res);
   Ok(())
